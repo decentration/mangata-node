@@ -1,6 +1,6 @@
 [package]
-name = "pallet-stable-swap"
-description = "A pallet providing stable swaps."
+name = "pallet-market"
+description = "An overarching pallet providing entry points to pools & trading."
 version = "1.0.0"
 authors.workspace = true
 homepage.workspace = true
@@ -20,6 +20,7 @@ frame-system = { workspace = true, default-features = false }
 mangata-support = { workspace = true, default-features = false }
 mangata-types = { workspace = true, default-features = false }
 sp-arithmetic = { workspace = true, default-features = false }
+sp-api = { workspace = true, default-features = false }
 sp-core = { workspace = true, default-features = false }
 sp-io = { workspace = true, default-features = false }
 sp-runtime = { workspace = true, default-features = false }
@@ -41,6 +42,7 @@ std = [
 	"mangata-support/std",
 	"scale-info/std",
 	"sp-arithmetic/std",
+	"sp-api/std",
 	"sp-core/std",
 	"sp-io/std",
 	"sp-runtime/std",

@@ -7,7 +7,7 @@ use frame_support::{
 	pallet_prelude::*,
 	traits::{
 		tokens::{Balance, CurrencyId},
-		Currency, ExistenceRequirement, MultiTokenCurrency, WithdrawReasons,
+		ExistenceRequirement, MultiTokenCurrency, WithdrawReasons,
 	},
 	transactional, PalletId,
 };
@@ -102,11 +102,10 @@ pub mod pallet {
 		/// Identifier for the assets.
 		type CurrencyId: CurrencyId;
 
-		/// Assets that are not allowed to be present in pools.
-		// type DisabledTokens: Contains<Self::CurrencyId>;
-
 		/// Treasury pallet id used for fee deposits
 		type TreasuryPalletId: Get<PalletId>;
+
+		// TODO FEES!!!
 
 		/// Percentage for swap fee that goes back into the pool.
 		#[pallet::constant]
@@ -126,9 +125,6 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxAssetsInPool: Get<u32>;
 
-		/// Interface for modifing asset registry when creating new pools
-		// type AssetMetadataMutation: AssetMetadataMutationTrait<Self::CurrencyId>;
-
 		/// Weight information for extrinsics in this pallet.
 		type WeightInfo: WeightInfo;
 	}
@@ -143,6 +139,8 @@ pub mod pallet {
 		PoolAlreadyExists,
 		/// Asset does not exist
 		AssetDoesNotExist,
+		/// Asset ids cannot be the same
+		SameAsset,
 		/// No such pool exists
 		NoSuchPool,
 		/// Provided arguments do not match in length
@@ -161,54 +159,10 @@ pub mod pallet {
 		InsufficientInputAmount,
 		/// Excesive output amount does not meet max requirements
 		ExcesiveOutputAmount,
-
-		/// Not enought assets
-		NotEnoughAssets,
-		/// No such liquidity asset exists
-		NoSuchLiquidityAsset,
-		/// Not enought reserve
-		NotEnoughReserve,
-		/// Zero amount is not supported
-		ZeroAmount,
-		/// Asset ids cannot be the same
-		SameAsset,
-		/// Asset already exists
-		AssetAlreadyExists,
-		/// Division by zero
-		DivisionByZero,
-		/// Unexpected failure
-		NotPairedWithNativeAsset,
-		/// Second asset amount exceeded expectations
-		SecondAssetAmountExceededExpectations,
 		/// Math overflow
 		MathOverflow,
 		/// Liquidity token creation failed
 		LiquidityTokenCreationFailed,
-		/// Not enough rewards earned
-		NotEnoughRewardsEarned,
-		/// Not a promoted pool
-		NotAPromotedPool,
-		/// Past time calculation
-		PastTimeCalculation,
-		/// Pool already promoted
-		PoolAlreadyPromoted,
-		/// Sold Amount too low
-		SoldAmountTooLow,
-		/// Asset id is blacklisted
-		FunctionNotAvailableForThisToken,
-		/// Pool considting of passed tokens id is blacklisted
-		DisallowedPool,
-		LiquidityCheckpointMathError,
-		CalculateRewardsMathError,
-		CalculateCumulativeWorkMaxRatioMathError,
-		CalculateRewardsAllMathError,
-		NoRights,
-		MultiswapShouldBeAtleastTwoHops,
-		MultiBuyAssetCantHaveSamePoolAtomicSwaps,
-		MultiSwapCantHaveSameTokenConsequetively,
-		/// Trading blocked by maintenance mode
-		TradingBlockedByMaintenanceMode,
-		PoolIsEmpty,
 	}
 
 	// Pallet's events.
@@ -326,7 +280,6 @@ pub mod pallet {
 		/// Initial liquidity amounts needs to be provided with [`Pallet::add_liquidity`].
 		#[pallet::call_index(0)]
 		#[pallet::weight(T::WeightInfo::create_pool())]
-		#[transactional]
 		pub fn create_pool(
 			origin: OriginFor<T>,
 			assets: Vec<T::CurrencyId>,
@@ -393,7 +346,6 @@ pub mod pallet {
 
 		#[pallet::call_index(1)]
 		#[pallet::weight(T::WeightInfo::add_liquidity())]
-		#[transactional]
 		pub fn swap(
 			origin: OriginFor<T>,
 			pool_id: PoolIdOf<T>,
@@ -481,7 +433,6 @@ pub mod pallet {
 
 		#[pallet::call_index(2)]
 		#[pallet::weight(T::WeightInfo::add_liquidity())]
-		#[transactional]
 		pub fn add_liquidity(
 			origin: OriginFor<T>,
 			pool_id: PoolIdOf<T>,
@@ -498,19 +449,12 @@ pub mod pallet {
 			let total_supply = T::Currency::total_issuance(pool.lp_token);
 			let n = T::HigherPrecisionBalance::from(pool.assets.len() as u128);
 
-			// check user's asset balances
-			for (id, amount) in asset_amounts.clone() {
+			// check initial amounts
+			for amount in amounts.clone() {
 				ensure!(
-					!(total_supply == Zero::zero() && *amount == Zero::zero()),
+					!(total_supply == Zero::zero() && amount == Zero::zero()),
 					Error::<T>::InitialLiquidityZeroAmount
 				);
-				T::Currency::ensure_can_withdraw(
-					*id,
-					&sender,
-					*amount,
-					WithdrawReasons::all(),
-					Default::default(),
-				)?;
 			}
 
 			// get initial invariant
@@ -597,7 +541,6 @@ pub mod pallet {
 		/// Withdraw a single asset from the pool
 		#[pallet::call_index(3)]
 		#[pallet::weight(T::WeightInfo::remove_liquidity_one_asset())]
-		#[transactional]
 		pub fn remove_liquidity_one_asset(
 			origin: OriginFor<T>,
 			pool_id: PoolIdOf<T>,
@@ -652,7 +595,6 @@ pub mod pallet {
 		/// Withdraw assets from the pool in an imbalanced amounts
 		#[pallet::call_index(4)]
 		#[pallet::weight(T::WeightInfo::remove_liquidity_imbalanced())]
-		#[transactional]
 		pub fn remove_liquidity_imbalanced(
 			origin: OriginFor<T>,
 			pool_id: PoolIdOf<T>,
@@ -743,7 +685,6 @@ pub mod pallet {
 		/// Withdraw assets from the pool in an imbalanced amounts
 		#[pallet::call_index(5)]
 		#[pallet::weight(T::WeightInfo::remove_liquidity())]
-		#[transactional]
 		pub fn remove_liquidity(
 			origin: OriginFor<T>,
 			pool_id: PoolIdOf<T>,
@@ -830,8 +771,6 @@ pub mod pallet {
 		}
 
 		/// Calculate the current input dx given output dy.
-		/// A swap can yield a lower output dy due to dynamic fee,
-		/// which is computed *after* applying dx,dy to reserves
 		pub fn get_dx(
 			pool_id: &PoolIdOf<T>,
 			asset_in: T::CurrencyId,
@@ -886,6 +825,7 @@ pub mod pallet {
 			Err(Error::<T>::UnexpectedFailure)
 		}
 
+		/// Calculate the output dy given input dx.
 		pub fn get_dy(
 			pool_id: &PoolIdOf<T>,
 			asset_in: T::CurrencyId,
@@ -973,10 +913,6 @@ pub mod pallet {
 
 		fn treasury_account_id() -> T::AccountId {
 			T::TreasuryPalletId::get().into_account_truncating()
-		}
-
-		fn account_id() -> T::AccountId {
-			PalletId(*b"py/stbsw").into_account_truncating()
 		}
 
 		// 0.3% total fee

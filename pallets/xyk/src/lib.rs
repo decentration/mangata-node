@@ -308,9 +308,12 @@ use frame_support::{
 	transactional,
 };
 use frame_system::pallet_prelude::*;
-use mangata_support::traits::{
-	ActivationReservesProviderTrait, GetMaintenanceStatusTrait, PoolCreateApi, PreValidateSwaps,
-	ProofOfStakeRewardsApi, Valuate, XykFunctionsTrait,
+use mangata_support::{
+	pools::{PoolInfo, Inspect},
+	traits::{
+		ActivationReservesProviderTrait, GetMaintenanceStatusTrait, PoolCreateApi,
+		PreValidateSwaps, ProofOfStakeRewardsApi, Valuate, XykFunctionsTrait,
+	},
 };
 use mangata_types::multipurpose_liquidity::ActivateKind;
 use orml_tokens::{MultiTokenCurrencyExtended, MultiTokenReservableCurrency};
@@ -3669,5 +3672,11 @@ impl<T: Config> PoolCreateApi<T::AccountId, BalanceOf<T>, CurrencyIdOf<T>> for P
 				None
 			},
 		}
+	}
+}
+
+impl<T: Config> Inspect<CurrencyIdOf<T>, CurrencyIdOf<T>> for Pallet<T> {
+	fn get_pool_info(pool_id: CurrencyIdOf<T>) -> Option<PoolInfo<CurrencyIdOf<T>>> {
+		LiquidityPools::<T>::get(pool_id)
 	}
 }
