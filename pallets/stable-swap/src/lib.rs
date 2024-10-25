@@ -13,6 +13,7 @@ use frame_support::{
 };
 use frame_system::pallet_prelude::*;
 
+use mangata_support::pools::{Inspect, Mutate};
 use sp_arithmetic::traits::Unsigned;
 use sp_runtime::traits::{
 	checked_pow, AccountIdConversion, CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, Ensure, One,
@@ -121,6 +122,9 @@ pub mod pallet {
 
 		#[pallet::constant]
 		type MaxApmCoeff: Get<u128>;
+
+		#[pallet::constant]
+		type DefaultApmCoeff: Get<u128>;
 
 		#[pallet::constant]
 		type MaxAssetsInPool: Get<u32>;
@@ -288,57 +292,13 @@ pub mod pallet {
 		) -> DispatchResult {
 			let sender = ensure_signed(origin)?;
 
-			ensure!(
-				1 <= amp_coeff && amp_coeff <= T::MaxApmCoeff::get(),
-				Error::<T>::AmpCoeffOutOfRange
-			);
-
-			let assets_in_len = assets.len();
-			ensure!(
-				assets_in_len <= T::MaxAssetsInPool::get().try_into().unwrap_or_default(),
-				Error::<T>::TooManyAssets
-			);
-			ensure!(
-				rates.len() <= T::MaxAssetsInPool::get().try_into().unwrap_or_default(),
-				Error::<T>::TooManyAssets
-			);
-			ensure!(rates.len() == assets_in_len, Error::<T>::ArgumentsLengthMismatch);
-
-			let mut assets = assets.clone();
-			assets.sort();
-			assets.dedup();
-			ensure!(assets_in_len == assets.len(), Error::<T>::SameAsset);
-
-			for id in assets.clone() {
-				ensure!(T::Currency::exists(id), Error::<T>::AssetDoesNotExist)
-			}
-
-			let lp_token: T::CurrencyId = T::Currency::create(&sender, T::Balance::zero())
-				.map_err(|_| Error::<T>::LiquidityTokenCreationFailed)?
-				.into();
-			let pool_account = Self::get_pool_account(&lp_token);
-			ensure!(
-				!frame_system::Pallet::<T>::account_exists(&pool_account),
-				Error::<T>::PoolAlreadyExists
-			);
-			frame_system::Pallet::<T>::inc_providers(&pool_account);
-
-			let assets = AssetIdsOf::<T>::truncate_from(assets);
-			let rates = BalancesOf::<T>::truncate_from(rates);
-			let amp_coeff = amp_coeff * Self::A_PRECISION;
-			let pool_info = PoolInfo {
-				lp_token: lp_token.clone(),
-				assets: assets.clone(),
-				amp_coeff,
-				rate_multipliers: rates,
-			};
-			Pools::<T>::insert(lp_token.clone(), pool_info);
+			let info = Self::do_create_pool(&sender, assets, rates, amp_coeff)?;
 
 			Self::deposit_event(Event::PoolCreated {
 				creator: sender,
-				pool_id: lp_token,
-				lp_token,
-				assets,
+				pool_id: info.lp_token,
+				lp_token: info.lp_token,
+				assets: info.assets,
 			});
 
 			Ok(())
@@ -356,68 +316,7 @@ pub mod pallet {
 		) -> DispatchResult {
 			let sender = ensure_signed(origin)?;
 
-			// ensure same asset
-			// ensure can withdraw dx
-			// ensure pool exists
-			let maybe_pool = Pools::<T>::get(pool_id.clone());
-			let pool = maybe_pool.as_ref().ok_or(Error::<T>::NoSuchPool)?;
-			let pool_account = Self::get_pool_account(&pool_id);
-
-			// ensure assets in pool
-			let i = pool.get_asset_index::<T>(asset_in)?;
-			let j = pool.get_asset_index::<T>(asset_out)?;
-
-			// old balances
-			let (_, xp) = Self::get_balances_xp_pool(&pool_account, &pool)?;
-
-			// get tokens in
-			T::Currency::transfer(
-				asset_in,
-				&sender,
-				&pool_account,
-				dx,
-				ExistenceRequirement::AllowDeath,
-			)?;
-
-			// get dy for dx
-			let (dy, dy_fee) = Self::calc_dy(
-				i,
-				j,
-				T::HigherPrecisionBalance::from(dx),
-				pool.amp_coeff,
-				&xp,
-				pool.rate_multipliers.to_vec(),
-			)?;
-
-			let to_treasury = Self::checked_mul_div_to_balance(
-				&Self::checked_mul_div_u128(&dy_fee, &Self::get_trsy_fee(), Self::FEE_DENOMINATOR)?,
-				pool.rate_multipliers[j],
-			)?
-			.try_into()
-			.map_err(|_| Error::<T>::MathOverflow)?;
-
-			T::Currency::transfer(
-				pool.assets[i],
-				&pool_account,
-				&Self::treasury_account_id(),
-				to_treasury,
-				ExistenceRequirement::AllowDeath,
-			)?;
-
-			// real units
-			let dy = Self::checked_mul_div_to_balance(
-				&dy.checked_sub(&dy_fee).ok_or(Error::<T>::MathOverflow)?,
-				pool.rate_multipliers[j],
-			)?;
-			ensure!(dy >= min_dy, Error::<T>::InsufficientOutputAmount);
-
-			T::Currency::transfer(
-				asset_out,
-				&pool_account,
-				&sender,
-				dy,
-				ExistenceRequirement::AllowDeath,
-			)?;
+			let dy = Self::do_swap(&sender, pool_id, asset_in, asset_out, dx, min_dy)?;
 
 			Self::deposit_event(Event::AssetsSwapped {
 				who: sender,
@@ -441,98 +340,18 @@ pub mod pallet {
 		) -> DispatchResult {
 			let sender = ensure_signed(origin)?;
 
-			let maybe_pool = Pools::<T>::get(pool_id.clone());
-			let pool = maybe_pool.as_ref().ok_or(Error::<T>::NoSuchPool)?;
-			ensure!(amounts.len() == pool.assets.len(), Error::<T>::ArgumentsLengthMismatch);
-			let pool_account = Self::get_pool_account(&pool_id);
-			let asset_amounts = pool.assets.iter().zip(amounts.iter());
-			let total_supply = T::Currency::total_issuance(pool.lp_token);
-			let n = T::HigherPrecisionBalance::from(pool.assets.len() as u128);
+			let (mint_amount, fees) =
+				Self::do_add_liquidity(&sender, pool_id, amounts.clone(), min_amount_lp_tokens)?;
 
-			// check initial amounts
-			for amount in amounts.clone() {
-				ensure!(
-					!(total_supply == Zero::zero() && amount == Zero::zero()),
-					Error::<T>::InitialLiquidityZeroAmount
-				);
-			}
-
-			// get initial invariant
-			let (balances_0, d_0) = Self::get_invariant_pool(&pool_account, &pool)?;
-
-			// transfer from user account
-			for (id, amount) in asset_amounts {
-				T::Currency::transfer(
-					*id,
-					&sender,
-					&pool_account,
-					*amount,
-					ExistenceRequirement::AllowDeath,
-				)?;
-			}
-
-			// check new invariant
-			let (balances_1, d_1) = Self::get_invariant_pool(&pool_account, &pool)?;
-			ensure!(d_1 > d_0, Error::<T>::PoolInvariantBroken);
-
-			let mut fees_b: Vec<T::Balance> = vec![];
-			// LPs also incur fees. A swap between A & B would pay roughly the same amount of fees as depositing A into the pool and then withdrawing B.
-			let mint_amount = if total_supply > Zero::zero() {
-				let (d_1, fees) = Self::calc_imbalanced_liquidity_fees(
-					&pool,
-					&n,
-					&d_0,
-					&d_1,
-					&balances_0,
-					&balances_1,
-				)?;
-
-				for (&id, &f) in pool.assets.iter().zip(fees.iter()) {
-					let to_treasury = Self::checked_mul_div_u128(
-						&f,
-						&Self::get_trsy_fee(),
-						Self::FEE_DENOMINATOR,
-					)?
-					.try_into()
-					.map_err(|_| Error::<T>::MathOverflow)?;
-
-					T::Currency::transfer(
-						id,
-						&pool_account,
-						&Self::treasury_account_id(),
-						to_treasury,
-						ExistenceRequirement::AllowDeath,
-					)?;
-
-					fees_b.push(f.try_into().map_err(|_| Error::<T>::MathOverflow)?)
-				}
-
-				d_1.checked_sub(&d_0)
-					.ok_or(Error::<T>::MathOverflow)?
-					.checked_mul(&T::HigherPrecisionBalance::from(total_supply))
-					.ok_or(Error::<T>::MathOverflow)?
-					.checked_div(&d_0)
-					.ok_or(Error::<T>::MathOverflow)?
-					.try_into()
-					.map_err(|_| Error::<T>::MathOverflow)?
-			} else {
-				// no fees on intial liquidity deposit
-				d_1.try_into().map_err(|_| Error::<T>::MathOverflow)?
-			};
-
-			ensure!(mint_amount >= min_amount_lp_tokens, Error::<T>::InsufficientOutputAmount);
-
-			T::Currency::mint(pool.lp_token, &sender, mint_amount)?;
-
-			let total_supply = T::Currency::total_issuance(pool.lp_token);
+			let total_supply = T::Currency::total_issuance(pool_id);
 			Self::deposit_event(Event::LiquidityMinted {
 				who: sender,
 				pool_id,
 				amounts_provided: BoundedVec::truncate_from(amounts),
-				lp_token: pool.lp_token,
+				lp_token: pool_id,
 				lp_token_minted: mint_amount,
 				total_supply,
-				fees: BoundedVec::truncate_from(fees_b),
+				fees,
 			});
 
 			Ok(())
@@ -693,6 +512,255 @@ pub mod pallet {
 		) -> DispatchResult {
 			let sender = ensure_signed(origin)?;
 
+			let amounts = Self::do_remove_liquidity(&sender, pool_id, burn_amount, min_amounts)?;
+
+			let total_supply = T::Currency::total_issuance(pool_id);
+			Self::deposit_event(Event::LiquidityBurned {
+				who: sender,
+				pool_id,
+				amounts,
+				burned_amount: burn_amount,
+				total_supply,
+				fees: BoundedVec::new(),
+			});
+
+			Ok(())
+		}
+	}
+
+	impl<T: Config> Pallet<T> {
+		const PRECISION: u128 = 10_u128.pow(18);
+		const FEE_DENOMINATOR: u128 = 10_u128.pow(10);
+		const A_PRECISION: u128 = 100;
+
+		// calls impl
+		pub fn do_create_pool(
+			sender: &T::AccountId,
+			assets: Vec<T::CurrencyId>,
+			rates: Vec<T::Balance>,
+			amp_coeff: u128,
+		) -> Result<PoolInfoOf<T>, DispatchError> {
+			ensure!(
+				1 <= amp_coeff && amp_coeff <= T::MaxApmCoeff::get(),
+				Error::<T>::AmpCoeffOutOfRange
+			);
+
+			let assets_in_len = assets.len();
+			ensure!(
+				assets_in_len <= T::MaxAssetsInPool::get().try_into().unwrap_or_default(),
+				Error::<T>::TooManyAssets
+			);
+			ensure!(
+				rates.len() <= T::MaxAssetsInPool::get().try_into().unwrap_or_default(),
+				Error::<T>::TooManyAssets
+			);
+			ensure!(rates.len() == assets_in_len, Error::<T>::ArgumentsLengthMismatch);
+
+			let mut assets = assets.clone();
+			assets.sort();
+			assets.dedup();
+			ensure!(assets_in_len == assets.len(), Error::<T>::SameAsset);
+
+			for id in assets.clone() {
+				ensure!(T::Currency::exists(id), Error::<T>::AssetDoesNotExist)
+			}
+
+			let lp_token: T::CurrencyId = T::Currency::create(&sender, T::Balance::zero())
+				.map_err(|_| Error::<T>::LiquidityTokenCreationFailed)?
+				.into();
+			let pool_account = Self::get_pool_account(&lp_token);
+			ensure!(
+				!frame_system::Pallet::<T>::account_exists(&pool_account),
+				Error::<T>::PoolAlreadyExists
+			);
+			frame_system::Pallet::<T>::inc_providers(&pool_account);
+
+			let assets = AssetIdsOf::<T>::truncate_from(assets);
+			let rates = BalancesOf::<T>::truncate_from(rates);
+			let amp_coeff = amp_coeff * Self::A_PRECISION;
+			let pool_info = PoolInfo {
+				lp_token: lp_token.clone(),
+				assets: assets.clone(),
+				amp_coeff,
+				rate_multipliers: rates,
+			};
+			Pools::<T>::insert(lp_token.clone(), pool_info.clone());
+
+			Ok(pool_info)
+		}
+
+		pub fn do_swap(
+			sender: &T::AccountId,
+			pool_id: PoolIdOf<T>,
+			asset_in: T::CurrencyId,
+			asset_out: T::CurrencyId,
+			dx: T::Balance,
+			min_dy: T::Balance,
+		) -> Result<T::Balance, DispatchError> {
+			// ensure same asset
+			// ensure can withdraw dx
+			// ensure pool exists
+			let maybe_pool = Pools::<T>::get(pool_id.clone());
+			let pool = maybe_pool.as_ref().ok_or(Error::<T>::NoSuchPool)?;
+			let pool_account = Self::get_pool_account(&pool_id);
+
+			// ensure assets in pool
+			let i = pool.get_asset_index::<T>(asset_in)?;
+			let j = pool.get_asset_index::<T>(asset_out)?;
+
+			// old balances
+			let (_, xp) = Self::get_balances_xp_pool(&pool_account, &pool)?;
+
+			// get tokens in
+			T::Currency::transfer(
+				asset_in,
+				&sender,
+				&pool_account,
+				dx,
+				ExistenceRequirement::AllowDeath,
+			)?;
+
+			// get dy for dx
+			let (dy, dy_fee) = Self::calc_dy(
+				i,
+				j,
+				T::HigherPrecisionBalance::from(dx),
+				pool.amp_coeff,
+				&xp,
+				pool.rate_multipliers.to_vec(),
+			)?;
+
+			let to_treasury = Self::checked_mul_div_to_balance(
+				&Self::checked_mul_div_u128(&dy_fee, &Self::get_trsy_fee(), Self::FEE_DENOMINATOR)?,
+				pool.rate_multipliers[j],
+			)?
+			.try_into()
+			.map_err(|_| Error::<T>::MathOverflow)?;
+
+			T::Currency::transfer(
+				pool.assets[i],
+				&pool_account,
+				&Self::treasury_account_id(),
+				to_treasury,
+				ExistenceRequirement::AllowDeath,
+			)?;
+
+			// real units
+			let dy = Self::checked_mul_div_to_balance(
+				&dy.checked_sub(&dy_fee).ok_or(Error::<T>::MathOverflow)?,
+				pool.rate_multipliers[j],
+			)?;
+			ensure!(dy >= min_dy, Error::<T>::InsufficientOutputAmount);
+
+			T::Currency::transfer(
+				asset_out,
+				&pool_account,
+				&sender,
+				dy,
+				ExistenceRequirement::AllowDeath,
+			)?;
+
+			Ok(dy)
+		}
+
+		pub fn do_add_liquidity(
+			sender: &T::AccountId,
+			pool_id: PoolIdOf<T>,
+			amounts: Vec<T::Balance>,
+			min_amount_lp_tokens: T::Balance,
+		) -> Result<(T::Balance, BalancesOf<T>), DispatchError> {
+			let maybe_pool = Pools::<T>::get(pool_id.clone());
+			let pool = maybe_pool.as_ref().ok_or(Error::<T>::NoSuchPool)?;
+			ensure!(amounts.len() == pool.assets.len(), Error::<T>::ArgumentsLengthMismatch);
+			let pool_account = Self::get_pool_account(&pool_id);
+			let asset_amounts = pool.assets.iter().zip(amounts.iter());
+			let total_supply = T::Currency::total_issuance(pool.lp_token);
+			let n = T::HigherPrecisionBalance::from(pool.assets.len() as u128);
+
+			// check initial amounts
+			for amount in amounts.clone() {
+				ensure!(
+					!(total_supply == Zero::zero() && amount == Zero::zero()),
+					Error::<T>::InitialLiquidityZeroAmount
+				);
+			}
+
+			// get initial invariant
+			let (balances_0, d_0) = Self::get_invariant_pool(&pool_account, &pool)?;
+
+			// transfer from user account
+			for (id, amount) in asset_amounts {
+				T::Currency::transfer(
+					*id,
+					&sender,
+					&pool_account,
+					*amount,
+					ExistenceRequirement::AllowDeath,
+				)?;
+			}
+
+			// check new invariant
+			let (balances_1, d_1) = Self::get_invariant_pool(&pool_account, &pool)?;
+			ensure!(d_1 > d_0, Error::<T>::PoolInvariantBroken);
+
+			let mut fees_b: Vec<T::Balance> = vec![];
+			// LPs also incur fees. A swap between A & B would pay roughly the same amount of fees as depositing A into the pool and then withdrawing B.
+			let mint_amount = if total_supply > Zero::zero() {
+				let (d_1, fees) = Self::calc_imbalanced_liquidity_fees(
+					&pool,
+					&n,
+					&d_0,
+					&d_1,
+					&balances_0,
+					&balances_1,
+				)?;
+
+				for (&id, &f) in pool.assets.iter().zip(fees.iter()) {
+					let to_treasury = Self::checked_mul_div_u128(
+						&f,
+						&Self::get_trsy_fee(),
+						Self::FEE_DENOMINATOR,
+					)?
+					.try_into()
+					.map_err(|_| Error::<T>::MathOverflow)?;
+
+					T::Currency::transfer(
+						id,
+						&pool_account,
+						&Self::treasury_account_id(),
+						to_treasury,
+						ExistenceRequirement::AllowDeath,
+					)?;
+
+					fees_b.push(f.try_into().map_err(|_| Error::<T>::MathOverflow)?)
+				}
+
+				d_1.checked_sub(&d_0)
+					.ok_or(Error::<T>::MathOverflow)?
+					.checked_mul(&T::HigherPrecisionBalance::from(total_supply))
+					.ok_or(Error::<T>::MathOverflow)?
+					.checked_div(&d_0)
+					.ok_or(Error::<T>::MathOverflow)?
+					.try_into()
+					.map_err(|_| Error::<T>::MathOverflow)?
+			} else {
+				// no fees on intial liquidity deposit
+				d_1.try_into().map_err(|_| Error::<T>::MathOverflow)?
+			};
+
+			ensure!(mint_amount >= min_amount_lp_tokens, Error::<T>::InsufficientOutputAmount);
+
+			T::Currency::mint(pool.lp_token, &sender, mint_amount)?;
+
+			Ok((mint_amount, BoundedVec::truncate_from(fees_b)))
+		}
+
+		pub fn do_remove_liquidity(
+			sender: &T::AccountId,
+			pool_id: PoolIdOf<T>,
+			burn_amount: T::Balance,
+			min_amounts: Vec<T::Balance>,
+		) -> Result<BalancesOf<T>, DispatchError> {
 			let maybe_pool = Pools::<T>::get(pool_id.clone());
 			let pool = maybe_pool.as_ref().ok_or(Error::<T>::NoSuchPool)?;
 			ensure!(min_amounts.len() == pool.assets.len(), Error::<T>::ArgumentsLengthMismatch);
@@ -711,6 +779,9 @@ pub mod pallet {
 					.try_into()
 					.map_err(|_| Error::<T>::MathOverflow)?;
 				amounts.push(value);
+
+				ensure!(value >= min_amounts[i], Error::<T>::InsufficientOutputAmount);
+
 				T::Currency::transfer(
 					pool.assets[i],
 					&pool_account,
@@ -722,24 +793,8 @@ pub mod pallet {
 
 			T::Currency::burn_and_settle(pool.lp_token, &sender, burn_amount)?;
 
-			let total_supply = T::Currency::total_issuance(pool.lp_token);
-			Self::deposit_event(Event::LiquidityBurned {
-				who: sender,
-				pool_id,
-				amounts: BoundedVec::truncate_from(amounts),
-				burned_amount: burn_amount,
-				total_supply,
-				fees: BoundedVec::new(),
-			});
-
-			Ok(())
+			Ok(BoundedVec::truncate_from(amounts))
 		}
-	}
-
-	impl<T: Config> Pallet<T> {
-		const PRECISION: u128 = 10_u128.pow(18);
-		const FEE_DENOMINATOR: u128 = 10_u128.pow(10);
-		const A_PRECISION: u128 = 100;
 
 		/// The account of the pool that store asset balances.
 		///
@@ -1484,5 +1539,63 @@ pub mod pallet {
 			}
 			return false;
 		}
+
+		// 10 ** (36 - _coins[n].decimals())
+		pub(crate) fn get_decimals_mul(asset_decimals: u32) -> Result<T::Balance, Error<T>> {
+			let m = (36_u32 - asset_decimals)
+				.try_into()
+				.map_err(|_| Error::<T>::UnexpectedFailure)?;
+			checked_pow(T::Balance::from(10_u32), m).ok_or(Error::<T>::MathOverflow)
+		}
+	}
+}
+
+impl<T: Config> Inspect<T::AccountId> for Pallet<T> {
+	type CurrencyId = T::CurrencyId;
+	type Balance = T::Balance;
+
+	fn get_pool_info(
+		pool_id: Self::CurrencyId,
+	) -> Option<mangata_support::pools::PoolInfo<Self::CurrencyId>> {
+		Pools::<T>::get(pool_id).map(|info| (info.assets[0], info.assets[1]))
+	}
+}
+
+impl<T: Config> Mutate<T::AccountId> for Pallet<T> {
+	fn create_pool(
+		sender: &T::AccountId,
+		asset_1: Self::CurrencyId,
+		asset_1_decimals: u32,
+		asset_2: Self::CurrencyId,
+		asset_2_decimals: u32,
+	) -> Result<Self::CurrencyId, DispatchError> {
+		let assets = vec![asset_1, asset_2];
+		let rate_1 = Self::get_decimals_mul(asset_1_decimals)?;
+		let rate_2 = Self::get_decimals_mul(asset_2_decimals)?;
+		let rates = vec![rate_1, rate_2];
+		let info = Self::do_create_pool(sender, assets, rates, T::DefaultApmCoeff::get())?;
+		Ok(info.lp_token)
+	}
+
+	fn add_liquidity(
+		sender: &T::AccountId,
+		pool_id: Self::CurrencyId,
+		amounts: (Self::Balance, Self::Balance),
+		min_amount_lp_tokens: Self::Balance,
+	) -> Result<Self::Balance, DispatchError> {
+		let amounts = vec![amounts.0, amounts.1];
+		let (minted, fee) = Self::do_add_liquidity(&sender, pool_id, amounts, min_amount_lp_tokens)?;
+		Ok(minted)
+	}
+
+	fn remove_liquidity(
+		sender: &T::AccountId,
+		pool_id: Self::CurrencyId,
+		liquidity_asset_amount: Self::Balance,
+		min_asset_amounts_out: (Self::Balance, Self::Balance),
+	) -> DispatchResult {
+		let min_amounts = vec![min_asset_amounts_out.0, min_asset_amounts_out.1];
+		let out = Self::do_remove_liquidity(&sender, pool_id, liquidity_asset_amount, min_amounts)?;
+		Ok(())
 	}
 }

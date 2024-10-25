@@ -14,7 +14,10 @@ use frame_support::{
 use frame_system::pallet_prelude::*;
 use mangata_support::{
 	pools::{Inspect, Mutate},
-	traits::{ActivationReservesProviderTrait, ProofOfStakeRewardsApi, XykFunctionsTrait},
+	traits::{
+		ActivationReservesProviderTrait, AssetRegistryProviderTrait, ProofOfStakeRewardsApi,
+		XykFunctionsTrait,
+	},
 };
 use mangata_types::multipurpose_liquidity::ActivateKind;
 
@@ -26,7 +29,7 @@ use sp_runtime::traits::{
 use sp_std::{convert::TryInto, fmt::Debug, vec, vec::Vec};
 
 use orml_tokens::MultiTokenCurrencyExtended;
-use orml_traits::asset_registry::Mutate as AssetRegistryMutate;
+use orml_traits::asset_registry::Inspect as AssetRegistryInspect;
 
 mod weights;
 use crate::weights::WeightInfo;
@@ -100,11 +103,11 @@ pub mod pallet {
 		/// Reward apis for native asset LP tokens activation
 		type Rewards: ProofOfStakeRewardsApi<Self::AccountId, Self::Balance, Self::CurrencyId>;
 
-		type LiquidityReservations: ActivationReservesProviderTrait<
-			Self::AccountId,
-			Self::Balance,
-			Self::CurrencyId,
-		>;
+		// type LiquidityReservations: ActivationReservesProviderTrait<
+		// 	Self::AccountId,
+		// 	Self::Balance,
+		// 	Self::CurrencyId,
+		// >;
 
 		/// Vesting apis for providing native vested liquidity
 		type Vesting: MultiTokenVestingLocks<
@@ -114,7 +117,8 @@ pub mod pallet {
 		>;
 
 		/// Apis for LP asset creation in asset registry
-		type AssetRegistry: AssetRegistryMutate<AssetId = Self::CurrencyId>;
+		type AssetRegistry: AssetRegistryProviderTrait<Self::CurrencyId>
+			+ AssetRegistryInspect<AssetId = Self::CurrencyId>;
 
 		/// List of tokens ids that are not allowed to be used at all
 		type DisabledTokens: Contains<Self::CurrencyId>;
@@ -140,6 +144,10 @@ pub mod pallet {
 		NotPairedWithNativeAsset,
 		/// Not a promoted pool
 		NotAPromotedPool,
+		/// Asset does not exists
+		AssetDoesNotExists,
+		/// Operation not available for such pool type
+		FunctionNotAvailableForThisPoolKind,
 	}
 
 	// Pallet's events.
@@ -186,27 +194,39 @@ pub mod pallet {
 					second_asset_amount,
 				)?,
 				PoolKind::StableSwap => {
-					let lp_token =
-						T::StableSwap::create_pool(&sender, first_asset_id, second_asset_id)?;
+					let first_decimal = T::AssetRegistry::metadata(&first_asset_id)
+						.map(|meta| meta.decimals)
+						.ok_or(Error::<T>::AssetDoesNotExists)?;
+					let second_decimal = T::AssetRegistry::metadata(&second_asset_id)
+						.map(|meta| meta.decimals)
+						.ok_or(Error::<T>::AssetDoesNotExists)?;
 
-					T::StableSwap::mint_liquidity(
+					let lp_token = T::StableSwap::create_pool(
 						&sender,
-						lp_token,
 						first_asset_id,
-						first_asset_amount,
-						second_asset_amount,
+						first_decimal,
+						second_asset_id,
+						second_decimal,
 					)?;
 
-					T::AssetRegistry::register_pool(first_asset_id, second_asset_id, lp_token)?;
+					T::StableSwap::add_liquidity(
+						&sender,
+						lp_token,
+						(first_asset_amount, second_asset_amount),
+						Zero::zero(),
+					)?;
+
+					T::AssetRegistry::create_pool_asset(lp_token, first_asset_id, second_asset_id)?;
 				},
 			}
 
 			Ok(())
 		}
 
-		/// Provide liquidity into the pool of `pool_id`.
+		/// Provide liquidity into the pool of `pool_id`, suitable for Xyk pools.
 		/// An optimal amount of the other asset will be calculated on current rate,
 		/// a maximum amount should be provided to limit possible rate slippage.
+		/// For a StableSwap pool a rate of 1:1 is used.
 		/// Liquidity tokens that represent this share of the pool will be sent to origin.
 		#[pallet::call_index(1)]
 		#[pallet::weight(T::WeightInfo::mint_liquidity())]
@@ -233,13 +253,16 @@ pub mod pallet {
 			Ok(())
 		}
 
+		/// Provide fixed liquidity into the pool of `pool_id`, suitable for StableSwap pools.
+		/// For Xyk pools, if a single amount is defined, it will swap internally to to match current rate,
+		/// setting both values results in error.
+		/// Liquidity tokens that represent this share of the pool will be sent to origin.
 		#[pallet::call_index(2)]
 		#[pallet::weight(T::WeightInfo::mint_liquidity())]
-		pub fn mint_liquidity_single_asset(
+		pub fn mint_liquidity_fixed(
 			origin: OriginFor<T>,
 			pool_id: PoolIdOf<T>,
-			asset_id: T::CurrencyId,
-			asset_amount: T::Balance,
+			amounts: (T::Balance, T::Balance),
 			min_amount_lp_tokens: T::Balance,
 		) -> DispatchResult {
 			let sender = ensure_signed(origin)?;
@@ -249,22 +272,32 @@ pub mod pallet {
 
 			match pool_info.kind {
 				PoolKind::Xyk => {
+                    ensure!(
+                        amounts.0 == Zero::zero() || amounts.1 == Zero::zero(),
+                        Error::<T>::FunctionNotAvailableForThisPoolKind
+                    );
+
+                    let (id, amount) = if amounts.1 == Zero::zero() {
+                        (pool_info.pool.0, amounts.0)
+                    } else {
+                        (pool_info.pool.1, amounts.1)
+                    };
+
 					let (_, lp_amout) = T::Xyk::provide_liquidity_with_conversion(
 						sender,
 						pool_info.pool.0,
 						pool_info.pool.1,
-						asset_id,
-						asset_amount,
+						id,
+						amount,
 						true,
 					)?;
 					ensure!(lp_amout > min_amount_lp_tokens, Error::<T>::InsufficientOutputAmount);
 				},
 				PoolKind::StableSwap => {
-					let amount = T::StableSwap::mint_liquidity_single(
+					let amount = T::StableSwap::add_liquidity(
 						&sender,
 						pool_id,
-						asset_id,
-						asset_amount,
+						amounts,
 						min_amount_lp_tokens,
 					)?;
 					T::Rewards::activate_liquidity(
@@ -410,7 +443,7 @@ pub mod pallet {
 					// noop on zero amount
 					T::Rewards::deactivate_liquidity(sender.clone(), pool_id, deactivate)?;
 
-					T::StableSwap::burn_liquidity(
+					T::StableSwap::remove_liquidity(
 						&sender,
 						pool_id,
 						liquidity_burn_amount,
@@ -523,12 +556,12 @@ pub mod pallet {
 					amount
 				},
 				PoolKind::StableSwap => {
-					let amount = T::StableSwap::mint_liquidity(
+					// use 1:1 rate for amounts
+					let amount = T::StableSwap::add_liquidity(
 						&sender,
 						pool_info.pool_id,
-						asset_id,
-						amount,
-						max_amount,
+						(amount, amount),
+						Zero::zero(),
 					)?;
 					if activate {
 						T::Rewards::activate_liquidity(

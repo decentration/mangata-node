@@ -335,14 +335,12 @@ impl pallet_stable_swap::Config for Runtime {
 	type HigherPrecisionBalance = sp_core::U256;
 	type CurrencyId = TokenId;
 	type TreasuryPalletId = cfg::TreasuryPalletIdOf<Runtime>;
-	// type DisallowedPools = Bootstrap;
-	// type DisabledTokens =
-	// 	(cfg::pallet_xyk::TestTokensFilter, cfg::pallet_xyk::AssetRegisterFilter<Runtime>);
 	type PoolFeePercentage = cfg::pallet_xyk::PoolFeePercentage;
 	type TreasuryFeePercentage = cfg::pallet_xyk::TreasuryFeePercentage;
 	type BuyAndBurnFeePercentage = cfg::pallet_xyk::BuyAndBurnFeePercentage;
 	type MaxApmCoeff = ConstU128<1_000_000>;
-	type MaxAssetsInPool = ConstU32<8>;
+	type DefaultApmCoeff = ConstU128<1_000>;
+	type MaxAssetsInPool = ConstU32<2>;
 	type WeightInfo = ();
 }
 
@@ -839,6 +837,23 @@ impl pallet_metamask_signature::Config for Runtime {
 	type UrlStringLimit = frame_support::traits::ConstU32<1024>;
 }
 
+impl pallet_market::Config for Runtime {
+	type RuntimeEvent = RuntimeEvent;
+	type Currency = orml_tokens::MultiTokenCurrencyAdapter<Runtime>;
+	type Balance = Balance;
+	type CurrencyId = TokenId;
+	type NativeCurrencyId = tokens::RxTokenId;
+	type Xyk = Xyk;
+	type StableSwap = StableSwap;
+	type Rewards = ProofOfStake;
+	type Vesting = Vesting;
+	type AssetRegistry = cfg::orml_asset_registry::AssetRegistryProvider<Runtime>;
+	type DisabledTokens =
+		(cfg::pallet_xyk::TestTokensFilter, cfg::pallet_xyk::AssetRegisterFilter<Runtime>);
+	type DisallowedPools = Bootstrap;
+	type WeightInfo = ();
+}
+
 // Create the runtime by composing the FRAME pallets that were previously configured.
 construct_runtime!(
 	pub struct Runtime {
@@ -856,7 +871,7 @@ construct_runtime!(
 		TransactionPayment: pallet_transaction_payment = 11,
 
 		// Xyk stuff
-		StablePool: pallet_stable_swap = 12,
+		StableSwap: pallet_stable_swap = 12,
 		Xyk: pallet_xyk = 13,
 		ProofOfStake: pallet_proof_of_stake = 14,
 
@@ -877,6 +892,9 @@ construct_runtime!(
 
 		// Bootstrap
 		Bootstrap: pallet_bootstrap = 21,
+
+		// AMM
+		Market: pallet_market = 22,
 
 		// Collator support. The order of these 6 are important and shall not change.
 		Authorship: pallet_authorship = 29,

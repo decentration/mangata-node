@@ -5386,6 +5386,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 [[package]]
 name = "orml-asset-registry"
 version = "0.9.0"
+source = "git+https://github.com/gasp-xyz/open-runtime-module-library?branch=eth-rollup-develop#75849a348e30c60e5b642f839774ee5a90ae7991"
 dependencies = [
  "frame-benchmarking",
  "frame-support",
@@ -5404,6 +5405,7 @@ dependencies = [
 [[package]]
 name = "orml-tokens"
 version = "0.9.0"
+source = "git+https://github.com/gasp-xyz/open-runtime-module-library?branch=eth-rollup-develop#75849a348e30c60e5b642f839774ee5a90ae7991"
 dependencies = [
  "frame-benchmarking",
  "frame-support",
@@ -5422,6 +5424,7 @@ dependencies = [
 [[package]]
 name = "orml-traits"
 version = "0.9.0"
+source = "git+https://github.com/gasp-xyz/open-runtime-module-library?branch=eth-rollup-develop#75849a348e30c60e5b642f839774ee5a90ae7991"
 dependencies = [
  "frame-support",
  "impl-trait-for-tuples",
@@ -5440,6 +5443,7 @@ dependencies = [
 [[package]]
 name = "orml-utilities"
 version = "0.9.0"
+source = "git+https://github.com/gasp-xyz/open-runtime-module-library?branch=eth-rollup-develop#75849a348e30c60e5b642f839774ee5a90ae7991"
 dependencies = [
  "frame-support",
  "parity-scale-codec",
@@ -7509,6 +7513,7 @@ dependencies = [
  "pallet-identity",
  "pallet-issuance",
  "pallet-maintenance",
+ "pallet-market",
  "pallet-membership",
  "pallet-metamask-signature",
  "pallet-multipurpose-liquidity",

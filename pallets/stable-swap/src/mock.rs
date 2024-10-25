@@ -87,6 +87,7 @@ impl swap::Config for Test {
 	type TreasuryFeePercentage = ConstU128<5>;
 	type BuyAndBurnFeePercentage = ConstU128<5>;
 	type MaxApmCoeff = ConstU128<1_000_000>;
+	type DefaultApmCoeff = ConstU128<1_000>;
 	type MaxAssetsInPool = ConstU32<8>;
 	type WeightInfo = ();
 }

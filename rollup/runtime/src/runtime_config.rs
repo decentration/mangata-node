@@ -1200,6 +1200,12 @@ pub mod config {
 	pub mod orml_asset_registry {
 		use crate::*;
 
+		const LIQUIDITY_TOKEN_IDENTIFIER: &[u8] = b"LiquidityPoolToken";
+		const HEX_INDICATOR: &[u8] = b"0x";
+		const TOKEN_SYMBOL: &[u8] = b"TKN";
+		const TOKEN_SYMBOL_SEPARATOR: &[u8] = b"-";
+		const DEFAULT_DECIMALS: u32 = 18u32;
+
 		parameter_types! {
 			pub const StringLimit: u32 = 50;
 		}
@@ -1261,8 +1267,9 @@ pub mod config {
 		}
 
 		pub struct AssetRegistryProvider<T>(PhantomData<T>);
-		impl<T: orml_asset_registry::Config<CustomMetadata = CustomMetadata>>
-			AssetRegistryProviderTrait<T::AssetId> for AssetRegistryProvider<T>
+		impl<
+				T: orml_asset_registry::Config<AssetId = TokenId, CustomMetadata = CustomMetadata>,
+			> AssetRegistryProviderTrait<T::AssetId> for AssetRegistryProvider<T>
 		{
 			fn get_l1_asset_id(l1_asset: L1Asset) -> Option<T::AssetId> {
 				orml_asset_registry::L1AssetToId::<T>::get(l1_asset)
@@ -1279,6 +1286,82 @@ pub mod config {
 
 				orml_asset_registry::Pallet::<T>::do_register_l1_asset(metadata, None, l1_asset)
 			}
+
+			fn create_pool_asset(
+				lp_asset: T::AssetId,
+				asset_1: T::AssetId,
+				asset_2: T::AssetId,
+			) -> DispatchResult {
+				let name_lp = format_u128_with_leading_zeros(lp_asset, 8);
+				let name_asset_1 = format_u128_with_leading_zeros(lp_asset, 8);
+				let name_asset_2 = format_u128_with_leading_zeros(lp_asset, 8);
+
+				let mut name: Vec<u8> = Vec::<u8>::new();
+				name.extend_from_slice(LIQUIDITY_TOKEN_IDENTIFIER);
+				name.extend_from_slice(HEX_INDICATOR);
+				name.extend_from_slice(&name_lp);
+
+				let mut symbol: Vec<u8> = Vec::<u8>::new();
+				symbol.extend_from_slice(TOKEN_SYMBOL);
+				symbol.extend_from_slice(HEX_INDICATOR);
+				symbol.extend_from_slice(&name_asset_1);
+				symbol.extend_from_slice(TOKEN_SYMBOL_SEPARATOR);
+				symbol.extend_from_slice(TOKEN_SYMBOL);
+				symbol.extend_from_slice(HEX_INDICATOR);
+				symbol.extend_from_slice(&name_asset_2);
+
+				let metadata = AssetMetadata {
+					decimals: DEFAULT_DECIMALS,
+					name: BoundedVec::truncate_from(name),
+					symbol: BoundedVec::truncate_from(symbol),
+					existential_deposit: Zero::zero(),
+					additional: Default::default(),
+				};
+
+				orml_asset_registry::Pallet::<T>::do_register_asset_without_asset_processor(
+					metadata, lp_asset,
+				)
+			}
+		}
+
+		impl<T: orml_asset_registry::Config<AssetId = TokenId>> orml_traits::asset_registry::Inspect
+			for AssetRegistryProvider<T>
+		{
+			type AssetId = T::AssetId;
+			type Balance = T::Balance;
+			type CustomMetadata = T::CustomMetadata;
+			type StringLimit = T::StringLimit;
+
+			fn metadata(
+				asset_id: &Self::AssetId,
+			) -> Option<AssetMetadata<Self::Balance, Self::CustomMetadata, Self::StringLimit>> {
+				orml_asset_registry::Pallet::<T>::metadata(asset_id)
+			}
+		}
+
+		fn format_u128_with_leading_zeros(num: TokenId, width: usize) -> Vec<u8> {
+			let mut result = Vec::new();
+			let mut current = num;
+			let mut digits = 0;
+
+			while current != 0 {
+				current /= 10;
+				digits += 1;
+			}
+
+			for _ in 0..width - digits {
+				result.push(b'0');
+			}
+
+			current = num;
+			while current != 0 {
+				let digit = (current % 10) as u8;
+				result.push(digit + b'0');
+				current /= 10;
+			}
+
+			result.reverse();
+			result
 		}
 	}
 

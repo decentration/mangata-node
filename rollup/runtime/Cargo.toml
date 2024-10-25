@@ -27,6 +27,7 @@ pallet-bootstrap = { path = "../../pallets/bootstrap", default-features = false,
 pallet-fee-lock = { path = "../../pallets/fee-lock", default-features = false }
 pallet-issuance = { path = "../../pallets/issuance", default-features = false }
 pallet-maintenance = { path = "../../pallets/maintenance", default-features = false }
+pallet-market = { path = "../../pallets/market", default-features = false }
 pallet-multipurpose-liquidity = { path = "../../pallets/multipurpose-liquidity", default-features = false }
 pallet-metamask-signature = { path = "../../pallets/metamask-signature", default-features = false }
 pallet-proof-of-stake = { path = "../../pallets/proof-of-stake", default-features = false, version = "0.1.0" }
@@ -124,6 +125,7 @@ std = [
 	"pallet-grandpa/std",
 	"pallet-identity/std",
 	"pallet-issuance/std",
+	"pallet-market/std",
 	"pallet-maintenance/std",
 	"pallet-membership/std",
 	"pallet-metamask-signature/std",
@@ -184,6 +186,7 @@ try-runtime = [
 	"pallet-grandpa/try-runtime",
 	"pallet-identity/try-runtime",
 	"pallet-issuance/try-runtime",
+	"pallet-market/try-runtime",
 	"pallet-maintenance/try-runtime",
 	"pallet-membership/try-runtime",
 	"pallet-multipurpose-liquidity/try-runtime",
@@ -223,6 +226,7 @@ runtime-benchmarks = [
 	"pallet-grandpa/runtime-benchmarks",
 	"pallet-identity/runtime-benchmarks",
 	"pallet-issuance/runtime-benchmarks",
+	"pallet-market/runtime-benchmarks",
 	"pallet-maintenance/runtime-benchmarks",
 	"pallet-membership/runtime-benchmarks",
 	"pallet-multipurpose-liquidity/runtime-benchmarks",

@@ -293,7 +293,7 @@ use frame_support::{
 	assert_ok,
 	dispatch::{DispatchErrorWithPostInfo, DispatchResult, PostDispatchInfo},
 	ensure,
-	traits::Contains,
+	traits::{tokens::CurrencyId, Contains},
 	PalletId,
 };
 use frame_system::ensure_signed;
@@ -309,7 +309,7 @@ use frame_support::{
 };
 use frame_system::pallet_prelude::*;
 use mangata_support::{
-	pools::{PoolInfo, Inspect},
+	pools::{Inspect, PoolInfo},
 	traits::{
 		ActivationReservesProviderTrait, GetMaintenanceStatusTrait, PoolCreateApi,
 		PreValidateSwaps, ProofOfStakeRewardsApi, Valuate, XykFunctionsTrait,
@@ -3675,7 +3675,10 @@ impl<T: Config> PoolCreateApi<T::AccountId, BalanceOf<T>, CurrencyIdOf<T>> for P
 	}
 }
 
-impl<T: Config> Inspect<CurrencyIdOf<T>, CurrencyIdOf<T>> for Pallet<T> {
+impl<T: Config> Inspect<T::AccountId> for Pallet<T> {
+	type CurrencyId = CurrencyIdOf<T>;
+	type Balance = BalanceOf<T>;
+
 	fn get_pool_info(pool_id: CurrencyIdOf<T>) -> Option<PoolInfo<CurrencyIdOf<T>>> {
 		LiquidityPools::<T>::get(pool_id)
 	}
