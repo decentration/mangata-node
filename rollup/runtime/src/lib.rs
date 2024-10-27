@@ -800,6 +800,8 @@ impl pallet_rolldown::Config for Runtime {
 	type WeightInfo = weights::pallet_rolldown::ModuleWeight<Runtime>;
 }
 
+impl pallet_rolldown::RolldownBenchmarkingConfig for Runtime {}
+
 impl pallet_sequencer_staking::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
 	type Currency = orml_tokens::CurrencyAdapter<Runtime, tokens::RxTokenId>;

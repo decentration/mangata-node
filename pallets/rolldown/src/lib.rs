@@ -197,23 +197,23 @@ pub mod pallet {
 
 	#[pallet::storage]
 	pub type FerriedDeposits<T: Config> =
-		StorageMap<_, Blake2_128Concat, (T::ChainId, H256), T::AccountId, OptionQuery>;
+		StorageMap<_, Blake2_128Concat, (<T as Config>::ChainId, H256), T::AccountId, OptionQuery>;
 
 	#[pallet::storage]
 	/// stores id of the failed depoisit, so it can be  refunded using [`Pallet::refund_failed_deposit`]
 	pub type FailedL1Deposits<T: Config> =
-		StorageMap<_, Blake2_128Concat, (T::ChainId, u128), (T::AccountId, H256), OptionQuery>;
+		StorageMap<_, Blake2_128Concat, (<T as Config>::ChainId, u128), (T::AccountId, H256), OptionQuery>;
 
 	#[pallet::storage]
 	#[pallet::getter(fn get_last_processed_request_on_l2)]
 	// Id of the last request originating on other chain that has been executed
 	pub type LastProcessedRequestOnL2<T: Config> =
-		StorageMap<_, Blake2_128Concat, T::ChainId, u128, ValueQuery>;
+		StorageMap<_, Blake2_128Concat, <T as Config>::ChainId, u128, ValueQuery>;
 
 	#[pallet::storage]
 	#[pallet::unbounded]
 	// Id of the next request that will originate on this chain
-	pub type L2OriginRequestId<T: Config> = StorageValue<_, BTreeMap<T::ChainId, u128>, ValueQuery>;
+	pub type L2OriginRequestId<T: Config> = StorageValue<_, BTreeMap<<T as Config>::ChainId, u128>, ValueQuery>;
 
 	#[pallet::storage]
 	pub type ManualBatchExtraFee<T: Config> = StorageValue<_, BalanceOf<T>, ValueQuery>;
@@ -227,7 +227,7 @@ pub mod pallet {
 		Blake2_128Concat,
 		u128,
 		Blake2_128Concat,
-		T::ChainId,
+		<T as Config>::ChainId,
 		(T::AccountId, messages::L1Update, H256),
 		OptionQuery,
 	>;
@@ -239,7 +239,7 @@ pub mod pallet {
 		_,
 		Blake2_128Concat,
 		u128,
-		(BlockNumberFor<T>, T::ChainId, messages::L1Update),
+		(BlockNumberFor<T>, <T as Config>::ChainId, messages::L1Update),
 		OptionQuery,
 	>;
 
@@ -259,7 +259,7 @@ pub mod pallet {
 	pub type SequencersRights<T: Config> = StorageMap<
 		_,
 		Blake2_128Concat,
-		T::ChainId,
+		<T as Config>::ChainId,
 		BTreeMap<T::AccountId, SequencerRights>,
 		ValueQuery,
 	>;
@@ -271,7 +271,7 @@ pub mod pallet {
 	pub type L2Requests<T: Config> = StorageDoubleMap<
 		_,
 		Blake2_128Concat,
-		T::ChainId,
+		<T as Config>::ChainId,
 		Blake2_128Concat,
 		RequestId,
 		(L2Request<T::AccountId>, H256),
@@ -284,7 +284,7 @@ pub mod pallet {
 	pub type AwaitingCancelResolution<T: Config> = StorageMap<
 		_,
 		Blake2_128Concat,
-		T::ChainId,
+		<T as Config>::ChainId,
 		BTreeSet<(T::AccountId, u128, DisputeRole)>,
 		ValueQuery,
 	>;
@@ -292,12 +292,12 @@ pub mod pallet {
 	#[pallet::storage]
 	#[pallet::getter(fn get_last_update_by_sequencer)]
 	pub type LastUpdateBySequencer<T: Config> =
-		StorageMap<_, Blake2_128Concat, (T::ChainId, T::AccountId), u128, ValueQuery>;
+		StorageMap<_, Blake2_128Concat, (<T as Config>::ChainId, T::AccountId), u128, ValueQuery>;
 
 	#[pallet::storage]
 	#[pallet::getter(fn get_max_accepted_request_id_on_l2)]
 	pub type MaxAcceptedRequestIdOnl2<T: Config> =
-		StorageMap<_, Blake2_128Concat, T::ChainId, u128, ValueQuery>;
+		StorageMap<_, Blake2_128Concat, <T as Config>::ChainId, u128, ValueQuery>;
 
 	#[pallet::storage]
 	#[pallet::getter(fn get_total_number_of_deposits)]
@@ -322,37 +322,37 @@ pub mod pallet {
 	/// - last batch id
 	/// - range of the reqeusts in last batch
 	pub type L2RequestsBatchLast<T: Config> =
-		StorageValue<_, BTreeMap<T::ChainId, (BlockNumberFor<T>, u128, (u128, u128))>, ValueQuery>;
+		StorageValue<_, BTreeMap<<T as Config>::ChainId, (BlockNumberFor<T>, u128, (u128, u128))>, ValueQuery>;
 
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
 		L1ReadStored {
-			chain: T::ChainId,
+			chain: <T as Config>::ChainId,
 			sequencer: T::AccountId,
 			dispute_period_end: u128,
 			range: messages::Range,
 			hash: H256,
 		},
 		RequestProcessedOnL2 {
-			chain: T::ChainId,
+			chain: <T as Config>::ChainId,
 			request_id: u128,
 			status: Result<(), L1RequestProcessingError>,
 		},
 		L1ReadCanceled {
-			chain: T::ChainId,
+			chain: <T as Config>::ChainId,
 			canceled_sequencer_update: u128,
 			assigned_id: RequestId,
 		},
 		TxBatchCreated {
-			chain: T::ChainId,
+			chain: <T as Config>::ChainId,
 			source: BatchSource,
 			assignee: T::AccountId,
 			batch_id: u128,
 			range: (u128, u128),
 		},
 		WithdrawalRequestCreated {
-			chain: T::ChainId,
+			chain: <T as Config>::ChainId,
 			request_id: RequestId,
 			recipient: [u8; 20],
 			token_address: [u8; 20],
@@ -367,15 +367,15 @@ pub mod pallet {
 			ferry: Option<AccountIdOf<T>>,
 		},
 		L1ReadScheduledForExecution {
-			chain: T::ChainId,
+			chain: <T as Config>::ChainId,
 			hash: H256,
 		},
 		L1ReadIgnoredBecauseOfMaintenanceMode {
-			chain: T::ChainId,
+			chain: <T as Config>::ChainId,
 			hash: H256,
 		},
 		DepositFerried {
-			chain: T::ChainId,
+			chain: <T as Config>::ChainId,
 			deposit: messages::Deposit,
 			deposit_hash: H256,
 		},
@@ -419,8 +419,17 @@ pub mod pallet {
 		AlreadyExecuted,
 	}
 
+	#[cfg(feature = "runtime-benchmarks")]
+	pub trait RolldownBenchmarkingConfig:
+		pallet_sequencer_staking::Config
+	{
+	}
+
+	#[cfg(not(feature = "runtime-benchmarks"))]
+	pub trait RolldownBenchmarkingConfig {}
+
 	#[pallet::config]
-	pub trait Config: frame_system::Config {
+	pub trait Config: frame_system::Config + RolldownBenchmarkingConfig {
 		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 		type SequencerStakingProvider: SequencerStakingProviderTrait<
 			Self::AccountId,
@@ -510,7 +519,7 @@ pub mod pallet {
 			update: messages::L1Update,
 		) -> DispatchResultWithPostInfo {
 			let _ = ensure_root(origin)?;
-			let chain: T::ChainId = update.chain.into();
+			let chain: <T as Config>::ChainId = update.chain.into();
 
 			ensure!(
 				!T::MaintenanceStatusProvider::is_maintenance(),
@@ -528,7 +537,7 @@ pub mod pallet {
 		//EXTRINSIC2 (who canceled, dispute_period_end(u32-blocknum)))
 		pub fn cancel_requests_from_l1(
 			origin: OriginFor<T>,
-			chain: T::ChainId,
+			chain: <T as Config>::ChainId,
 			requests_to_cancel: u128,
 		) -> DispatchResultWithPostInfo {
 			let canceler = ensure_signed(origin)?;
@@ -588,7 +597,7 @@ pub mod pallet {
 		#[pallet::weight(T::DbWeight::get().reads_writes(1, 1).saturating_add(Weight::from_parts(40_000_000, 0)))]
 		pub fn withdraw(
 			origin: OriginFor<T>,
-			chain: T::ChainId,
+			chain: <T as Config>::ChainId,
 			recipient: [u8; 20],
 			token_address: [u8; 20],
 			amount: u128,
@@ -680,7 +689,7 @@ pub mod pallet {
 		#[pallet::weight(T::DbWeight::get().reads_writes(1, 1).saturating_add(Weight::from_parts(40_000_000, 0)))]
 		pub fn force_cancel_requests_from_l1(
 			origin: OriginFor<T>,
-			chain: T::ChainId,
+			chain: <T as Config>::ChainId,
 			requests_to_cancel: u128,
 		) -> DispatchResultWithPostInfo {
 			let _ = ensure_root(origin)?;
@@ -709,7 +718,7 @@ pub mod pallet {
 		#[pallet::weight(T::DbWeight::get().reads_writes(1, 1).saturating_add(Weight::from_parts(40_000_000, 0)))]
 		pub fn create_batch(
 			origin: OriginFor<T>,
-			chain: T::ChainId,
+			chain: <T as Config>::ChainId,
 			sequencer_account: Option<T::AccountId>,
 		) -> DispatchResult {
 			let sender = ensure_signed(origin)?;
@@ -753,7 +762,7 @@ pub mod pallet {
 		/// only deposit recipient can initiate refund failed deposit
 		pub fn refund_failed_deposit(
 			origin: OriginFor<T>,
-			chain: T::ChainId,
+			chain: <T as Config>::ChainId,
 			request_id: u128,
 		) -> DispatchResult {
 			let sender = ensure_signed(origin)?;
@@ -798,7 +807,7 @@ pub mod pallet {
 		/// provided requests range must exists - otherwise `[Error::InvalidRange]` error will be returned
 		pub fn force_create_batch(
 			origin: OriginFor<T>,
-			chain: T::ChainId,
+			chain: <T as Config>::ChainId,
 			range: (u128, u128),
 			sequencer_account: AccountIdOf<T>,
 		) -> DispatchResult {
@@ -827,7 +836,7 @@ pub mod pallet {
 		#[pallet::weight(T::DbWeight::get().reads_writes(1, 1).saturating_add(Weight::from_parts(40_000_000, 0)))]
 		pub fn ferry_deposit(
 			origin: OriginFor<T>,
-			chain: T::ChainId,
+			chain: <T as Config>::ChainId,
 			request_id: RequestId,
 			deposit_recipient: [u8; 20],
 			token_address: [u8; 20],
@@ -857,7 +866,7 @@ pub mod pallet {
 		#[pallet::weight(T::DbWeight::get().reads_writes(1, 1).saturating_add(Weight::from_parts(40_000_000, 0)))]
 		pub fn ferry_deposit_unsafe(
 			origin: OriginFor<T>,
-			chain: T::ChainId,
+			chain: <T as Config>::ChainId,
 			request_id: RequestId,
 			deposit_recipient: [u8; 20],
 			token_address: [u8; 20],
@@ -903,7 +912,7 @@ impl<T: Config> Pallet<T> {
 	}
 
 	pub fn verify_sequencer_update(
-		chain: T::ChainId,
+		chain: <T as Config>::ChainId,
 		hash: H256,
 		request_id: u128,
 	) -> Option<bool> {
@@ -1016,7 +1025,7 @@ impl<T: Config> Pallet<T> {
 		);
 	}
 
-	fn process_single_request(l1: T::ChainId, request: messages::L1UpdateRequest) {
+	fn process_single_request(l1: <T as Config>::ChainId, request: messages::L1UpdateRequest) {
 		if request.id() <= LastProcessedRequestOnL2::<T>::get(l1) {
 			return
 		}
@@ -1103,7 +1112,7 @@ impl<T: Config> Pallet<T> {
 		}
 	}
 
-	fn schedule_requests(now: BlockNumberFor<T>, chain: T::ChainId, update: messages::L1Update) {
+	fn schedule_requests(now: BlockNumberFor<T>, chain: <T as Config>::ChainId, update: messages::L1Update) {
 		let max_id = [
 			update.pendingDeposits.iter().map(|r| r.requestId.id).max(),
 			update.pendingCancelResolutions.iter().map(|r| r.requestId.id).max(),
@@ -1130,7 +1139,7 @@ impl<T: Config> Pallet<T> {
 	/// REVERT PREVIOUS CHANGES TO STORAGE, whoever is modifying it should take that into account!
 	/// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 	fn process_deposit(
-		l1: T::ChainId,
+		l1: <T as Config>::ChainId,
 		deposit: &messages::Deposit,
 	) -> Result<(), L1DepositProcessingError> {
 		let amount = TryInto::<u128>::try_into(deposit.amount)
@@ -1160,7 +1169,7 @@ impl<T: Config> Pallet<T> {
 	/// REVERT PREVIOUS CHANGES TO STORAGE, whoever is modifying it should take that into account!
 	/// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 	fn process_cancel_resolution(
-		l1: T::ChainId,
+		l1: <T as Config>::ChainId,
 		cancel_resolution: &messages::CancelResolution,
 	) -> Result<(), L1RequestProcessingError> {
 		let cancel_request_id = cancel_resolution.l2RequestId;
@@ -1217,7 +1226,7 @@ impl<T: Config> Pallet<T> {
 	}
 
 	fn handle_sequencer_deactivation(
-		chain: T::ChainId,
+		chain: <T as Config>::ChainId,
 		deactivated_sequencers: BTreeSet<T::AccountId>,
 	) {
 		SequencersRights::<T>::mutate(chain, |sequencers_set| {
@@ -1246,7 +1255,7 @@ impl<T: Config> Pallet<T> {
 			})
 	}
 
-	pub fn validate_l1_update(l1: T::ChainId, update: &messages::L1Update) -> DispatchResult {
+	pub fn validate_l1_update(l1: <T as Config>::ChainId, update: &messages::L1Update) -> DispatchResult {
 		ensure!(
 			!update.pendingDeposits.is_empty() || !update.pendingCancelResolutions.is_empty(),
 			Error::<T>::EmptyUpdate
@@ -1634,7 +1643,7 @@ impl<T: Config> Pallet<T> {
 
 	fn ferry_desposit_impl(
 		sender: T::AccountId,
-		chain: T::ChainId,
+		chain: <T as Config>::ChainId,
 		deposit: messages::Deposit,
 	) -> Result<(), Error<T>> {
 		let deposit_hash = deposit.abi_encode_hash();
@@ -1670,7 +1679,7 @@ impl<T: Config> Pallet<T> {
 }
 
 impl<T: Config> RolldownProviderTrait<ChainIdOf<T>, AccountIdOf<T>> for Pallet<T> {
-	fn new_sequencer_active(chain: T::ChainId, sequencer: &AccountIdOf<T>) {
+	fn new_sequencer_active(chain: <T as Config>::ChainId, sequencer: &AccountIdOf<T>) {
 		SequencersRights::<T>::mutate(chain, |sequencer_set| {
 			let count = sequencer_set.len() as u128;
 
@@ -1697,7 +1706,7 @@ impl<T: Config> RolldownProviderTrait<ChainIdOf<T>, AccountIdOf<T>> for Pallet<T
 		});
 	}
 
-	fn sequencer_unstaking(chain: T::ChainId, sequencer: &AccountIdOf<T>) -> DispatchResult {
+	fn sequencer_unstaking(chain: <T as Config>::ChainId, sequencer: &AccountIdOf<T>) -> DispatchResult {
 		ensure!(
 			Pallet::<T>::count_of_read_rights_under_dispute(chain, sequencer).is_zero(),
 			Error::<T>::SequencerLastUpdateStillInDisputePeriod
@@ -1714,7 +1723,7 @@ impl<T: Config> RolldownProviderTrait<ChainIdOf<T>, AccountIdOf<T>> for Pallet<T
 	}
 
 	fn handle_sequencer_deactivations(
-		chain: T::ChainId,
+		chain: <T as Config>::ChainId,
 		deactivated_sequencers: Vec<T::AccountId>,
 	) {
 		Pallet::<T>::handle_sequencer_deactivation(
