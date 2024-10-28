@@ -851,6 +851,7 @@ impl pallet_market::Config for Runtime {
 	type DisabledTokens =
 		(cfg::pallet_xyk::TestTokensFilter, cfg::pallet_xyk::AssetRegisterFilter<Runtime>);
 	type DisallowedPools = Bootstrap;
+	type MaintenanceStatusProvider = Maintenance;
 	type WeightInfo = ();
 }
 

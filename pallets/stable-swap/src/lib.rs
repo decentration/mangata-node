@@ -1486,6 +1486,9 @@ pub mod pallet {
 				let dyn_fee = Self::dynamic_fee_base(&xs, &ys, n)?;
 				fees.push(Self::checked_mul_div_u128(&diff, &dyn_fee, Self::FEE_DENOMINATOR)?);
 
+				// this can fail if the fee is bigger then available balance
+				// eg. pool initialized with low liquidity and adding big amount for single coin
+				// would cause fees on other assets larger then initial liquidity
 				balances_mint[i] =
 					balances_mint[i].checked_sub(&fees[i]).ok_or(Error::<T>::MathOverflow)?;
 			}
@@ -1595,7 +1598,19 @@ impl<T: Config> Mutate<T::AccountId> for Pallet<T> {
 		min_asset_amounts_out: (Self::Balance, Self::Balance),
 	) -> DispatchResult {
 		let min_amounts = vec![min_asset_amounts_out.0, min_asset_amounts_out.1];
-		let out = Self::do_remove_liquidity(&sender, pool_id, liquidity_asset_amount, min_amounts)?;
+		let _ = Self::do_remove_liquidity(&sender, pool_id, liquidity_asset_amount, min_amounts)?;
 		Ok(())
 	}
+	
+	fn swap(
+			sender: &T::AccountId,
+			pool_id: Self::CurrencyId,
+			asset_in: Self::CurrencyId,
+			asset_out: Self::CurrencyId,
+			amount_in: Self::Balance,
+			min_amount_out: Self::Balance,
+		) -> Result<Self::Balance, DispatchError> {
+			let dy = Self::do_swap(sender, pool_id, asset_in, asset_out, amount_in, min_amount_out)?;
+			Ok(dy)
+		}
 }

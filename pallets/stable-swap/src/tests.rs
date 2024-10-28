@@ -3,7 +3,7 @@ use std::vec;
 use frame_support::{assert_err, assert_ok};
 use sp_runtime::BoundedVec;
 
-use crate::{assert_event_emitted, mock::*, Config, Error, Event};
+use crate::{assert_event_emitted, mock::*, Config, Error, Event, Pallet};
 
 const UNIT: u128 = 10_u128.pow(18);
 
@@ -204,6 +204,56 @@ fn add_liquidity_should_work() {
 		assert_eq!(StableSwap::balance(1, TreasuryAccount::get()), 10547055005501540134);
 		assert_eq!(StableSwap::balance(2, TreasuryAccount::get()), 15346149327301319387);
 		assert_eq!(StableSwap::get_virtual_price(&3).unwrap(), 1000721478556158249);
+	});
+}
+
+#[test]
+fn add_liquidity_balanced_for_single_asset() {
+	new_test_ext().execute_with(|| {
+		let account: AccountId = 2;
+		let amount: Balance = 1_000_000 * UNIT;
+		let mint: Balance = 1_000 * UNIT;
+
+		StableSwap::create_new_token(&account, amount);
+		StableSwap::create_new_token(&account, amount);
+		StableSwap::create_new_token(&account, amount);
+		StableSwap::create_pool(RuntimeOrigin::signed(account), vec![0, 1], vec![UNIT, UNIT], 200)
+			.unwrap();
+
+		assert_ok!(StableSwap::add_liquidity(
+			RuntimeOrigin::signed(account),
+			3,
+			vec![2 * UNIT, 2 * UNIT],
+			1,
+		));
+
+		
+		let input_0 = 100_000 * UNIT;
+		let input_1 = 50_000 * UNIT;
+		// let input_1 = StableSwap::get_dy(&3, 0, 1, input_0).unwrap();
+		let amounts = vec![input_0, 0];
+		println!("amounts: {:?}", amounts.clone());
+		let exp = Pallet::<Test>::calc_lp_token_amount(&3, amounts, true).unwrap();
+		println!("exp: {:?}", exp);
+		// let amounts = vec![input_0, input_0, input_0];
+		// let expected = StableSwap::calc_lp_token_amount(&3, amounts.clone(), true).unwrap();
+
+		assert_ok!(StableSwap::add_liquidity(
+			RuntimeOrigin::signed(account),
+			3,
+			amounts.clone(),
+			1,
+		));
+
+		assert_event_emitted!(Event::LiquidityMinted {
+			who: 2,
+			pool_id: 2,
+			amounts_provided: BoundedVec::truncate_from(amounts),
+			lp_token: 2,
+			lp_token_minted: 0,
+			total_supply: 58495909140835157013204,
+			fees: BoundedVec::truncate_from(vec![]),
+		});
 	});
 }
 

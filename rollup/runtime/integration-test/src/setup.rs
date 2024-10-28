@@ -20,8 +20,8 @@ mod rollup_imports {
 			pallet_proxy::ProxyType,
 		},
 		AccountId, AssetRegistry, Balance, Bootstrap, CustomMetadata, FoundationMembers, Identity,
-		Maintenance, ProofOfStake, Proxy, Rolldown, Runtime, RuntimeCall, RuntimeOrigin, System,
-		TokenId, Tokens, UncheckedExtrinsic, Xyk, XykMetadata,
+		Maintenance, ProofOfStake, Proxy, Rolldown, Runtime, RuntimeCall, RuntimeEvent,
+		RuntimeOrigin, System, TokenId, Tokens, UncheckedExtrinsic, Xyk, XykMetadata,
 	};
 
 	pub const NATIVE_ASSET_ID: TokenId = rollup_runtime::runtime_config::tokens::RX_TOKEN_ID;

@@ -3,7 +3,8 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use frame_support::{
-	ensure,
+	dispatch::{DispatchErrorWithPostInfo, PostDispatchInfo},
+	ensure, fail,
 	pallet_prelude::*,
 	traits::{
 		tokens::{currency::MultiTokenVestingLocks, Balance, CurrencyId},
@@ -15,16 +16,19 @@ use frame_system::pallet_prelude::*;
 use mangata_support::{
 	pools::{Inspect, Mutate},
 	traits::{
-		ActivationReservesProviderTrait, AssetRegistryProviderTrait, ProofOfStakeRewardsApi,
-		XykFunctionsTrait,
+		ActivationReservesProviderTrait, AssetRegistryProviderTrait, GetMaintenanceStatusTrait,
+		ProofOfStakeRewardsApi, XykFunctionsTrait,
 	},
 };
 use mangata_types::multipurpose_liquidity::ActivateKind;
 
 use sp_arithmetic::traits::Unsigned;
-use sp_runtime::traits::{
-	checked_pow, AccountIdConversion, CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, Ensure, One,
-	Saturating, TrailingZeroInput, Zero,
+use sp_runtime::{
+	traits::{
+		checked_pow, AccountIdConversion, CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, Ensure,
+		One, Saturating, TrailingZeroInput, Zero,
+	},
+	ModuleError,
 };
 use sp_std::{convert::TryInto, fmt::Debug, vec, vec::Vec};
 
@@ -49,6 +53,7 @@ pub enum PoolKind {
 	StableSwap,
 }
 
+#[derive(Clone)]
 pub struct PoolInfo<CurrencyId> {
 	pool_id: CurrencyId,
 	kind: PoolKind,
@@ -63,6 +68,8 @@ pub type AssetPairOf<T> = (<T as Config>::CurrencyId, <T as Config>::CurrencyId)
 
 #[frame_support::pallet]
 pub mod pallet {
+	use sp_runtime::ModuleError;
+
 	use super::*;
 
 	#[pallet::pallet]
@@ -126,6 +133,9 @@ pub mod pallet {
 		/// List of assets that are not allowed to form a pool
 		type DisallowedPools: Contains<AssetPairOf<Self>>;
 
+		/// Disable trading with maintenance mode
+		type MaintenanceStatusProvider: GetMaintenanceStatusTrait;
+
 		/// Weight information for extrinsics in this pallet.
 		type WeightInfo: WeightInfo;
 	}
@@ -148,12 +158,37 @@ pub mod pallet {
 		AssetDoesNotExists,
 		/// Operation not available for such pool type
 		FunctionNotAvailableForThisPoolKind,
+		/// Trading blocked by maintenance mode
+		TradingBlockedByMaintenanceMode,
+		/// Multi swap path contains repetive pools
+		MultiSwapSamePool,
+		/// Input asset id is not connected with output asset id for given pools
+		MultiSwapPathInvalid,
+		/// Unexpected failure
+		UnexpectedFailure,
 	}
 
 	// Pallet's events.
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
-	pub enum Event<T: Config> {}
+	pub enum Event<T: Config> {
+		/// Atomic swap failed
+		MultiSwapAssetFailedOnAtomicSwap {
+			who: T::AccountId,
+			swap_pool_list: Vec<PoolIdOf<T>>,
+			swap_assets_list: Vec<AssetPairOf<T>>,
+			module_err: ModuleError,
+		},
+
+		/// Assets where swapped successfully
+		AssetsSwapped {
+			who: T::AccountId,
+			swap_pool_list: Vec<PoolIdOf<T>>,
+			swap_assets_list: Vec<AssetPairOf<T>>,
+			amount_in: T::Balance,
+			amount_out: T::Balance,
+		},
+	}
 
 	#[pallet::hooks]
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
@@ -259,7 +294,7 @@ pub mod pallet {
 		/// Liquidity tokens that represent this share of the pool will be sent to origin.
 		#[pallet::call_index(2)]
 		#[pallet::weight(T::WeightInfo::mint_liquidity())]
-		pub fn mint_liquidity_fixed(
+		pub fn mint_liquidity_fixed_amounts(
 			origin: OriginFor<T>,
 			pool_id: PoolIdOf<T>,
 			amounts: (T::Balance, T::Balance),
@@ -272,16 +307,16 @@ pub mod pallet {
 
 			match pool_info.kind {
 				PoolKind::Xyk => {
-                    ensure!(
-                        amounts.0 == Zero::zero() || amounts.1 == Zero::zero(),
-                        Error::<T>::FunctionNotAvailableForThisPoolKind
-                    );
+					ensure!(
+						amounts.0 == Zero::zero() || amounts.1 == Zero::zero(),
+						Error::<T>::FunctionNotAvailableForThisPoolKind
+					);
 
-                    let (id, amount) = if amounts.1 == Zero::zero() {
-                        (pool_info.pool.0, amounts.0)
-                    } else {
-                        (pool_info.pool.1, amounts.1)
-                    };
+					let (id, amount) = if amounts.1 == Zero::zero() {
+						(pool_info.pool.0, amounts.0)
+					} else {
+						(pool_info.pool.1, amounts.1)
+					};
 
 					let (_, lp_amout) = T::Xyk::provide_liquidity_with_conversion(
 						sender,
@@ -455,7 +490,7 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Executes a multiswap sell asset in a series of sell asset atomic swaps.
+		/// Executes a multiswap asset in a series of swap asset atomic swaps.
 		///
 		/// Multiswaps must fee lock instead of paying transaction fees.
 		///
@@ -467,45 +502,121 @@ pub mod pallet {
 		///
 		/// # Args:
 		/// - `swap_token_list` - This list of tokens is the route of the atomic swaps, starting with the asset sold and ends with the asset finally bought
-		/// - `sold_asset_amount`: The amount of the first asset sold
-		/// - `min_amount_out` - The minimum amount of last asset that must be bought in order to not fail on slippage. Slippage failures still charge exchange commission.
+		/// - `asset_id_in`: The id of the asset sold
+		/// - `asset_amount_in`: The amount of the asset sold
+		/// - `asset_id_out`: The id of the asset received
+		/// - `min_amount_out` - The minimum amount of requested asset that must be bought in order to not fail on slippage. Slippage failures still charge exchange commission.
+		// This call is part of the fee lock mechanism, which allows free execution in some cases
+		// in case of an error a 'trade fee' is subtracted from input swap asset to avoid DOS attacks
+		// `OnChargeTransaction` impl should check whether the sender has funds to cover such fee
+		// or consider transaction invalid
 		#[pallet::call_index(6)]
-		#[pallet::weight((T::WeightInfo::multiswap_sell_asset(swap_pool_list.len() as u32), DispatchClass::Operational, Pays::No))]
-		pub fn multiswap_sell_asset(
+		#[pallet::weight((T::WeightInfo::multiswap_asset(swap_pool_list.len() as u32), DispatchClass::Operational, Pays::No))]
+		pub fn multiswap_asset(
 			origin: OriginFor<T>,
 			swap_pool_list: Vec<PoolIdOf<T>>,
-			sold_asset_amount: T::Balance,
+			asset_id_in: T::CurrencyId,
+			asset_amount_in: T::Balance,
+			asset_id_out: T::CurrencyId,
 			min_amount_out: T::Balance,
 		) -> DispatchResultWithPostInfo {
-			Ok(().into())
-		}
+			let sender = ensure_signed(origin)?;
 
-		/// Executes a multiswap buy asset in a series of buy asset atomic swaps.
-		///
-		/// Multiswaps must fee lock instead of paying transaction fees.
-		///
-		/// First the multiswap is prevalidated, if it is successful then the extrinsic is accepted
-		/// and the exchange commission will be charged upon execution on the *first* swap using *max_amount_in*.
-		/// multiswap_buy_asset cannot have two (or more) atomic swaps on the same pool.
-		/// multiswap_buy_asset prevaildation only checks for whether there are enough funds to pay for the exchange commission.
-		/// Failure to have the required amount of first asset funds will result in failure (and charging of the exchange commission).
-		///
-		/// Upon failure of an atomic swap or bad slippage, all the atomic swaps are reverted and the exchange commission is charged.
-		/// Upon such a failure, the extrinsic is marked "successful", but an event for the failure is emitted
-		///
-		/// # Args:
-		/// - `swap_pool_list` - This list of pools is the route of the atomic swaps, starting with the asset sold and ends with the asset finally bought
-		/// - `bought_asset_amount`: The amount of the last asset bought
-		/// - `max_amount_in` - The maximum amount of first asset that can be sold in order to not fail on slippage. Slippage failures still charge exchange commission.
-		#[pallet::call_index(7)]
-		#[pallet::weight((T::WeightInfo::multiswap_buy_asset(swap_pool_list.len() as u32), DispatchClass::Operational, Pays::No))]
-		pub fn multiswap_buy_asset(
-			origin: OriginFor<T>,
-			swap_pool_list: Vec<PoolIdOf<T>>,
-			bought_asset_amount: T::Balance,
-			max_amount_in: T::Balance,
-		) -> DispatchResultWithPostInfo {
-			Ok(().into())
+			// ensure maintenance mode
+			ensure!(
+				!T::MaintenanceStatusProvider::is_maintenance(),
+				Error::<T>::TradingBlockedByMaintenanceMode
+			);
+
+			// let path = Self::get_path_for_in(&swap_pool_list)?;
+			// Self::validate_path()?;
+
+			// at least one swap
+			ensure!(swap_pool_list.len() > 0, Error::<T>::NoSuchPool);
+
+			// check pools repetition
+			let mut dedup = swap_pool_list.clone();
+			dedup.sort();
+			dedup.dedup();
+			ensure!(dedup.len() == swap_pool_list.len(), Error::<T>::MultiSwapSamePool);
+
+			let mut path: Vec<AssetPairOf<T>> = vec![];
+			let mut pools: Vec<PoolInfoOf<T>> = vec![];
+			for &pool_id in swap_pool_list.iter() {
+				let pool_info = Self::get_pool_info(pool_id)?;
+				pools.push(pool_info.clone());
+				// function not available for tokens
+				Self::check_assets_allowed(pool_info.pool)?;
+
+				// check pools' asset connection
+				// first is asset_id_in, last is asset_id_out
+				let prev_asset_id =
+					if let Some(&last) = path.last() { last.1 } else { asset_id_in };
+
+				if pool_info.pool.0 == prev_asset_id {
+					path.push(pool_info.pool);
+				} else if pool_info.pool.1 == prev_asset_id {
+					path.push((pool_info.pool.1, pool_info.pool.0));
+				} else {
+					fail!(Error::<T>::MultiSwapPathInvalid)
+				}
+			}
+
+			ensure!(
+				path.last().is_some_and(|&l| l.1 == asset_id_out),
+				Error::<T>::MultiSwapPathInvalid
+			);
+
+			// due to fee lock
+			// check sender's balance to pay for the trade fee not needed
+			// such check should be in `OnChargeTransaction` for runtime to allow fee lock
+
+			match frame_support::storage::with_storage_layer(|| -> Result<T::Balance, DispatchError> {
+				// atomic swaps, reverts on error
+				Self::do_swaps(&sender, pools, path.clone(), asset_amount_in, min_amount_out)
+			}) {
+				Ok(amount_out) => {
+					// deposit event swapped ok
+					Self::deposit_event(Event::AssetsSwapped {
+						who: sender.clone(),
+						swap_pool_list: swap_pool_list.clone(),
+						swap_assets_list: path,
+						amount_in: asset_amount_in,
+						amount_out,
+					});
+
+					Ok(())
+				},
+				Err(e) => {
+					// charge fee
+					// deposit failed event
+					if let DispatchError::Module(module_err) = e {
+						Self::deposit_event(Event::MultiSwapAssetFailedOnAtomicSwap {
+							who: sender.clone(),
+							swap_pool_list: swap_pool_list.clone(),
+							swap_assets_list: path,
+							module_err,
+						});
+						Err(e)
+					} else {
+						Err(Error::<T>::UnexpectedFailure.into())
+					}
+				},
+			}
+			// unexpected error within above
+			.map_err(|err| DispatchErrorWithPostInfo {
+				post_info: PostDispatchInfo {
+					actual_weight: Some(
+						T::WeightInfo::multiswap_asset(swap_pool_list.len() as u32),
+					),
+					pays_fee: Pays::Yes,
+				},
+				error: err,
+			})?;
+
+			// total swaps inc
+
+			Ok(Pays::No.into())
 		}
 	}
 
@@ -517,7 +628,7 @@ pub mod pallet {
 			if let Some(pool) = T::StableSwap::get_pool_info(pool_id) {
 				return Ok(PoolInfo { pool_id, kind: PoolKind::StableSwap, pool })
 			}
-
+			
 			return Err(Error::<T>::NoSuchPool);
 		}
 
@@ -563,7 +674,7 @@ pub mod pallet {
 						(amount, amount),
 						Zero::zero(),
 					)?;
-					if activate {
+					if activate && T::Rewards::native_rewards_enabled(pool_info.pool_id) {
 						T::Rewards::activate_liquidity(
 							sender.clone(),
 							pool_info.pool_id,
@@ -576,6 +687,40 @@ pub mod pallet {
 			};
 
 			Ok(lp_amount)
+		}
+
+		fn do_swaps(
+			sender: &T::AccountId,
+			pools: Vec<PoolInfoOf<T>>,
+			swaps: Vec<AssetPairOf<T>>,
+			amount_in: T::Balance,
+			min_amount_out: T::Balance,
+		) -> Result<T::Balance, DispatchError> {
+			let mut amount_out = amount_in;
+			for (pool, swap) in pools.iter().zip(swaps.into_iter()) {
+				amount_out = match pool.kind {
+					PoolKind::StableSwap => T::StableSwap::swap(
+						sender,
+						pool.pool_id,
+						swap.0,
+						swap.1,
+						amount_out,
+						Zero::zero(),
+					)?,
+					PoolKind::Xyk => T::Xyk::sell_asset(
+						sender.clone(),
+						swap.0,
+						swap.1,
+						amount_out,
+						Zero::zero(),
+						true,
+					)?,
+				}
+			}
+
+			ensure!(amount_out >= min_amount_out, Error::<T>::InsufficientOutputAmount);
+
+			Ok(amount_out)
 		}
 	}
 }
