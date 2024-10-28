@@ -14,7 +14,7 @@ use frame_support::{
 };
 use frame_system::pallet_prelude::*;
 use mangata_support::{
-	pools::{Inspect, Mutate},
+	pools::{Inspect, Mutate, SwapResult, TreasuryBurn},
 	traits::{
 		ActivationReservesProviderTrait, AssetRegistryProviderTrait, GetMaintenanceStatusTrait,
 		ProofOfStakeRewardsApi, XykFunctionsTrait,
@@ -68,8 +68,6 @@ pub type AssetPairOf<T> = (<T as Config>::CurrencyId, <T as Config>::CurrencyId)
 
 #[frame_support::pallet]
 pub mod pallet {
-	use sp_runtime::ModuleError;
-
 	use super::*;
 
 	#[pallet::pallet]
@@ -98,7 +96,7 @@ pub mod pallet {
 
 		/// Xyk pools
 		type Xyk: XykFunctionsTrait<Self::AccountId, Self::Balance, Self::CurrencyId>
-			+ Inspect<Self::AccountId, CurrencyId = Self::CurrencyId>;
+			+ TreasuryBurn<Self::AccountId, CurrencyId = Self::CurrencyId, Balance = Self::Balance>;
 
 		/// StableSwap pools
 		type StableSwap: Mutate<
@@ -571,10 +569,12 @@ pub mod pallet {
 			// check sender's balance to pay for the trade fee not needed
 			// such check should be in `OnChargeTransaction` for runtime to allow fee lock
 
-			match frame_support::storage::with_storage_layer(|| -> Result<T::Balance, DispatchError> {
-				// atomic swaps, reverts on error
-				Self::do_swaps(&sender, pools, path.clone(), asset_amount_in, min_amount_out)
-			}) {
+			match frame_support::storage::with_storage_layer(
+				|| -> Result<T::Balance, DispatchError> {
+					// atomic swaps, reverts on error
+					Self::do_swaps(&sender, pools, path.clone(), asset_amount_in, min_amount_out)
+				},
+			) {
 				Ok(amount_out) => {
 					// deposit event swapped ok
 					Self::deposit_event(Event::AssetsSwapped {
@@ -628,7 +628,7 @@ pub mod pallet {
 			if let Some(pool) = T::StableSwap::get_pool_info(pool_id) {
 				return Ok(PoolInfo { pool_id, kind: PoolKind::StableSwap, pool })
 			}
-			
+
 			return Err(Error::<T>::NoSuchPool);
 		}
 
@@ -699,14 +699,21 @@ pub mod pallet {
 			let mut amount_out = amount_in;
 			for (pool, swap) in pools.iter().zip(swaps.into_iter()) {
 				amount_out = match pool.kind {
-					PoolKind::StableSwap => T::StableSwap::swap(
-						sender,
-						pool.pool_id,
-						swap.0,
-						swap.1,
-						amount_out,
-						Zero::zero(),
-					)?,
+					PoolKind::StableSwap => {
+						let SwapResult { amount_out, treasury_fee, bnb_fee, .. } =
+							T::StableSwap::swap(
+								sender,
+								pool.pool_id,
+								swap.0,
+								swap.1,
+								amount_out,
+								Zero::zero(),
+							)?;
+
+						T::Xyk::settle_treasury_and_burn(swap.1, bnb_fee, treasury_fee)?;
+
+						amount_out
+					},
 					PoolKind::Xyk => T::Xyk::sell_asset(
 						sender.clone(),
 						swap.0,

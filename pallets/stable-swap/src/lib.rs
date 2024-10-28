@@ -13,7 +13,7 @@ use frame_support::{
 };
 use frame_system::pallet_prelude::*;
 
-use mangata_support::pools::{Inspect, Mutate};
+use mangata_support::pools::{Inspect, Mutate, SwapResult};
 use sp_arithmetic::traits::Unsigned;
 use sp_runtime::traits::{
 	checked_pow, AccountIdConversion, CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, Ensure, One,
@@ -69,6 +69,8 @@ pub type BalancesOf<T> = BoundedVec<<T as Config>::Balance, <T as Config>::MaxAs
 
 #[frame_support::pallet]
 pub mod pallet {
+	use mangata_support::pools::SwapResult;
+
 	use super::*;
 
 	#[pallet::pallet]
@@ -103,22 +105,24 @@ pub mod pallet {
 		/// Identifier for the assets.
 		type CurrencyId: CurrencyId;
 
-		/// Treasury pallet id used for fee deposits
+		/// Treasury pallet id used for fee deposits.
 		type TreasuryPalletId: Get<PalletId>;
 
-		// TODO FEES!!!
+		/// Treasury sub-account used for buy & burn.
+		type BnbTreasurySubAccDerive: Get<[u8; 4]>;
 
-		/// Percentage for swap fee that goes back into the pool.
+		/// Total fee applied to a swap.
+		/// Part goes back to pool, part to treasury, and part is burned.
 		#[pallet::constant]
-		type PoolFeePercentage: Get<u128>;
+		type MarketTotalFee: Get<u128>;
 
-		/// Percentage for swap fee that goes into the treasury.
+		/// Percentage of total fee that goes into the treasury.
 		#[pallet::constant]
-		type TreasuryFeePercentage: Get<u128>;
+		type MarketTreasuryFeePart: Get<u128>;
 
-		/// Percentage for swap fee that is burned.
+		/// Percentage of treasury fee that gets burned if possible.
 		#[pallet::constant]
-		type BuyAndBurnFeePercentage: Get<u128>;
+		type MarketBnBFeePart: Get<u128>;
 
 		#[pallet::constant]
 		type MaxApmCoeff: Get<u128>;
@@ -316,7 +320,9 @@ pub mod pallet {
 		) -> DispatchResult {
 			let sender = ensure_signed(origin)?;
 
-			let dy = Self::do_swap(&sender, pool_id, asset_in, asset_out, dx, min_dy)?;
+			// we ignore the buy&burn, funds stay in treasury
+			let SwapResult { amount_out, .. } =
+				Self::do_swap(&sender, pool_id, asset_in, asset_out, dx, min_dy)?;
 
 			Self::deposit_event(Event::AssetsSwapped {
 				who: sender,
@@ -324,7 +330,7 @@ pub mod pallet {
 				asset_in,
 				amount_in: dx,
 				asset_out,
-				amount_out: dy,
+				amount_out,
 			});
 
 			Ok(())
@@ -596,10 +602,7 @@ pub mod pallet {
 			asset_out: T::CurrencyId,
 			dx: T::Balance,
 			min_dy: T::Balance,
-		) -> Result<T::Balance, DispatchError> {
-			// ensure same asset
-			// ensure can withdraw dx
-			// ensure pool exists
+		) -> Result<SwapResult<T::Balance>, DispatchError> {
 			let maybe_pool = Pools::<T>::get(pool_id.clone());
 			let pool = maybe_pool.as_ref().ok_or(Error::<T>::NoSuchPool)?;
 			let pool_account = Self::get_pool_account(&pool_id);
@@ -630,18 +633,36 @@ pub mod pallet {
 				pool.rate_multipliers.to_vec(),
 			)?;
 
+			let fee = Self::checked_mul_div_to_balance(&dy_fee, pool.rate_multipliers[j])?;
 			let to_treasury = Self::checked_mul_div_to_balance(
 				&Self::checked_mul_div_u128(&dy_fee, &Self::get_trsy_fee(), Self::FEE_DENOMINATOR)?,
 				pool.rate_multipliers[j],
-			)?
-			.try_into()
-			.map_err(|_| Error::<T>::MathOverflow)?;
+			)?;
+
+			let to_bnb = Self::checked_mul_div_to_balance(
+				&Self::checked_mul_div_u128(
+					&T::HigherPrecisionBalance::from(to_treasury),
+					&Self::get_bnb_fee(),
+					Self::FEE_DENOMINATOR,
+				)?,
+				pool.rate_multipliers[j],
+			)?;
+
+			let to_treasury = to_treasury - to_bnb;
 
 			T::Currency::transfer(
 				pool.assets[i],
 				&pool_account,
 				&Self::treasury_account_id(),
 				to_treasury,
+				ExistenceRequirement::AllowDeath,
+			)?;
+
+			T::Currency::transfer(
+				pool.assets[i],
+				&pool_account,
+				&Self::bnb_treasury_account_id(),
+				to_bnb,
 				ExistenceRequirement::AllowDeath,
 			)?;
 
@@ -660,7 +681,12 @@ pub mod pallet {
 				ExistenceRequirement::AllowDeath,
 			)?;
 
-			Ok(dy)
+			Ok(SwapResult {
+				amount_out: dy,
+				total_fee: fee,
+				treasury_fee: to_treasury,
+				bnb_fee: to_bnb,
+			})
 		}
 
 		pub fn do_add_liquidity(
@@ -970,14 +996,21 @@ pub mod pallet {
 			T::TreasuryPalletId::get().into_account_truncating()
 		}
 
-		// 0.3% total fee
-		fn get_fee() -> T::HigherPrecisionBalance {
-			T::HigherPrecisionBalance::from(30_000_000_u128)
+		fn bnb_treasury_account_id() -> T::AccountId {
+			T::TreasuryPalletId::get()
+				.into_sub_account_truncating(T::BnbTreasurySubAccDerive::get())
 		}
 
-		// 50% of fee to treasury
+		fn get_fee() -> T::HigherPrecisionBalance {
+			T::HigherPrecisionBalance::from(T::MarketTotalFee::get())
+		}
+
 		fn get_trsy_fee() -> T::HigherPrecisionBalance {
-			T::HigherPrecisionBalance::from(5_000_000_000_u128)
+			T::HigherPrecisionBalance::from(T::MarketTreasuryFeePart::get())
+		}
+
+		fn get_bnb_fee() -> T::HigherPrecisionBalance {
+			T::HigherPrecisionBalance::from(T::MarketBnBFeePart::get())
 		}
 
 		// dyn fee 2* mul
@@ -1587,7 +1620,7 @@ impl<T: Config> Mutate<T::AccountId> for Pallet<T> {
 		min_amount_lp_tokens: Self::Balance,
 	) -> Result<Self::Balance, DispatchError> {
 		let amounts = vec![amounts.0, amounts.1];
-		let (minted, fee) = Self::do_add_liquidity(&sender, pool_id, amounts, min_amount_lp_tokens)?;
+		let (minted, _) = Self::do_add_liquidity(&sender, pool_id, amounts, min_amount_lp_tokens)?;
 		Ok(minted)
 	}
 
@@ -1601,16 +1634,15 @@ impl<T: Config> Mutate<T::AccountId> for Pallet<T> {
 		let _ = Self::do_remove_liquidity(&sender, pool_id, liquidity_asset_amount, min_amounts)?;
 		Ok(())
 	}
-	
+
 	fn swap(
-			sender: &T::AccountId,
-			pool_id: Self::CurrencyId,
-			asset_in: Self::CurrencyId,
-			asset_out: Self::CurrencyId,
-			amount_in: Self::Balance,
-			min_amount_out: Self::Balance,
-		) -> Result<Self::Balance, DispatchError> {
-			let dy = Self::do_swap(sender, pool_id, asset_in, asset_out, amount_in, min_amount_out)?;
-			Ok(dy)
-		}
+		sender: &T::AccountId,
+		pool_id: Self::CurrencyId,
+		asset_in: Self::CurrencyId,
+		asset_out: Self::CurrencyId,
+		amount_in: Self::Balance,
+		min_amount_out: Self::Balance,
+	) -> Result<SwapResult<Self::Balance>, DispatchError> {
+		Self::do_swap(sender, pool_id, asset_in, asset_out, amount_in, min_amount_out)
+	}
 }

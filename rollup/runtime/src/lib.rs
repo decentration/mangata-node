@@ -316,9 +316,9 @@ impl pallet_xyk::Config for Runtime {
 	type NativeCurrencyId = tokens::RxTokenId;
 	type TreasuryPalletId = cfg::TreasuryPalletIdOf<Runtime>;
 	type BnbTreasurySubAccDerive = cfg::pallet_xyk::BnbTreasurySubAccDerive;
-	type PoolFeePercentage = cfg::pallet_xyk::PoolFeePercentage;
-	type TreasuryFeePercentage = cfg::pallet_xyk::TreasuryFeePercentage;
-	type BuyAndBurnFeePercentage = cfg::pallet_xyk::BuyAndBurnFeePercentage;
+	type PoolFeePercentage = fees::PoolFeePercentage;
+	type TreasuryFeePercentage = fees::TreasuryFeePercentage;
+	type BuyAndBurnFeePercentage = fees::BuyAndBurnFeePercentage;
 	type LiquidityMiningRewards = ProofOfStake;
 	type VestingProvider = Vesting;
 	type DisallowedPools = Bootstrap;
@@ -335,9 +335,10 @@ impl pallet_stable_swap::Config for Runtime {
 	type HigherPrecisionBalance = sp_core::U256;
 	type CurrencyId = TokenId;
 	type TreasuryPalletId = cfg::TreasuryPalletIdOf<Runtime>;
-	type PoolFeePercentage = cfg::pallet_xyk::PoolFeePercentage;
-	type TreasuryFeePercentage = cfg::pallet_xyk::TreasuryFeePercentage;
-	type BuyAndBurnFeePercentage = cfg::pallet_xyk::BuyAndBurnFeePercentage;
+	type BnbTreasurySubAccDerive = cfg::pallet_xyk::BnbTreasurySubAccDerive;
+	type MarketTotalFee = fees::MarketTotalFee;
+	type MarketTreasuryFeePart = fees::MarketTreasuryFeePart;
+	type MarketBnBFeePart = fees::MarketBnBFeePart;
 	type MaxApmCoeff = ConstU128<1_000_000>;
 	type DefaultApmCoeff = ConstU128<1_000>;
 	type MaxAssetsInPool = ConstU32<2>;

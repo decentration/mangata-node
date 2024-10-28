@@ -309,7 +309,7 @@ use frame_support::{
 };
 use frame_system::pallet_prelude::*;
 use mangata_support::{
-	pools::{Inspect, PoolInfo},
+	pools::{Inspect, PoolInfo, TreasuryBurn},
 	traits::{
 		ActivationReservesProviderTrait, GetMaintenanceStatusTrait, PoolCreateApi,
 		PreValidateSwaps, ProofOfStakeRewardsApi, Valuate, XykFunctionsTrait,
@@ -3679,7 +3679,17 @@ impl<T: Config> Inspect<T::AccountId> for Pallet<T> {
 	type CurrencyId = CurrencyIdOf<T>;
 	type Balance = BalanceOf<T>;
 
-	fn get_pool_info(pool_id: CurrencyIdOf<T>) -> Option<PoolInfo<CurrencyIdOf<T>>> {
+	fn get_pool_info(pool_id: Self::CurrencyId) -> Option<PoolInfo<Self::CurrencyId>> {
 		LiquidityPools::<T>::get(pool_id)
+	}
+}
+
+impl<T: Config> TreasuryBurn<T::AccountId> for Pallet<T> {
+	fn settle_treasury_and_burn(
+		asset_id: Self::CurrencyId,
+		burn_amount: Self::Balance,
+		treasury_amount: Self::Balance,
+	) -> DispatchResult {
+		Self::settle_treasury_and_burn(asset_id, burn_amount, treasury_amount)
 	}
 }

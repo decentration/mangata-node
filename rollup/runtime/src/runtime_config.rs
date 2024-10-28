@@ -54,6 +54,22 @@ pub mod tokens {
 	}
 }
 
+pub mod fees {
+	use super::*;
+	// xyk uses 10_000 as fee multiplier
+	pub type PoolFeePercentage = frame_support::traits::ConstU128<20>;
+	pub type TreasuryFeePercentage = frame_support::traits::ConstU128<5>;
+	pub type BuyAndBurnFeePercentage = frame_support::traits::ConstU128<5>;
+
+	// market & stableswap uses 1e10 precision; 1*1e10 == 100%
+	// 0.3%, sum of above fees
+	pub type MarketTotalFee = ConstU128<30_000_000>;
+	// 33% of total fee goes to treasury
+	pub type MarketTreasuryFeePart = ConstU128<3_333_333_334>;
+	// 50% of treasury fee gets to burn
+	pub type MarketBnBFeePart = ConstU128<5_000_000_000>;
+}
+
 /// Opaque types. These are used by the CLI to instantiate machinery that don't need to know
 /// the specifics of the runtime. They can then be made to be agnostic over specific formats
 /// of data like extrinsics, allowing for them to continue syncing the network through upgrades
@@ -294,9 +310,6 @@ pub mod config {
 		parameter_types! {
 			pub const BnbTreasurySubAccDerive: [u8; 4] = *b"bnbt";
 		}
-		pub type PoolFeePercentage = frame_support::traits::ConstU128<20>;
-		pub type TreasuryFeePercentage = frame_support::traits::ConstU128<5>;
-		pub type BuyAndBurnFeePercentage = frame_support::traits::ConstU128<5>;
 
 		pub struct TestTokensFilter;
 		impl Contains<TokenId> for TestTokensFilter {
