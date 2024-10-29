@@ -115,6 +115,7 @@ mod benchmarks {
 	const SEQUENCER_ACCOUNT_2: [u8; 20] = hex!("0000000000000000000000000000000000000011");
 	const SEQUENCER_ALIAS_ACCOUNT: [u8; 20] = hex!("0000000000000000000000000000000000000020");
 
+	const FIRST_SCHEDULED_UPDATE_ID: u128 = 1u128;
 	const FIRST_BATCH_ID: u128 = 1u128;
 	const FIRST_REQUEST_ID: u128 = 1u128;
 	const DUMMY_REQUEST_ID: u128 = 77u128;
@@ -279,7 +280,7 @@ mod benchmarks {
 
 		let x_deposits: usize = (x as usize)/2;
 		let x_cancel_resolution: usize = (x as usize) - x_deposits;
-		let mut update = L1UpdateBuilder::default().with_requests(
+		let update = L1UpdateBuilder::default().with_requests(
 			[
 				vec![L1UpdateRequest::Deposit(Default::default()); x_deposits],
 				vec![L1UpdateRequest::CancelResolution(Default::default()); x_cancel_resolution]
@@ -621,7 +622,35 @@ mod benchmarks {
 		Ok(())
 	}
 
-	// benchmark schedule_requests!!
+	#[benchmark]
+	fn schedule_requests(x: Linear<2, 200>) -> Result<(), BenchmarkError>{
+
+		let (l1_aset_chain, l1_asset_address) = get_chain_and_address_for_asset_id::<T>(TOKEN_ID.into())?;
+		let l1_chain: <T as Config>::ChainId = l1_aset_chain.into();
+
+		let x_deposits: usize = (x as usize)/2;
+		let x_cancel_resolution: usize = (x as usize) - x_deposits;
+		let mut update = L1UpdateBuilder::default().with_requests(
+			[
+				vec![L1UpdateRequest::Deposit(Default::default()); x_deposits],
+				vec![L1UpdateRequest::CancelResolution(Default::default()); x_cancel_resolution]
+			].concat())
+			.build();
+
+		assert!(MaxAcceptedRequestIdOnl2::<T>::get(l1_chain).is_zero(), "BEFORE MaxAcceptedRequestIdOnl2 {:?} chain should be zero", l1_chain);
+		assert!(UpdatesExecutionQueue::<T>::get(FIRST_SCHEDULED_UPDATE_ID).is_none(), "BEFORE UpdatesExecutionQueue {:?} scheduled update id should be none", FIRST_SCHEDULED_UPDATE_ID);
+
+		#[block]
+		{Rolldown::<T>::schedule_requests(
+			BlockNumberFor::<T>::default(),
+			l1_chain,
+			update
+		);}
+
+		assert!(!MaxAcceptedRequestIdOnl2::<T>::get(l1_chain).is_zero(), "AFTER MaxAcceptedRequestIdOnl2 {:?} chain should NOT be zero", l1_chain);
+		assert!(UpdatesExecutionQueue::<T>::get(FIRST_SCHEDULED_UPDATE_ID).is_some(), "AFTER UpdatesExecutionQueue {:?} scheduled update id should be some", FIRST_SCHEDULED_UPDATE_ID);
+		Ok(())
+	}
 
 	// maybe create batch in on_init is O(l1) i think
 	// so is schedule_request_for_execution_if_dispute_period_has_passsed i think
