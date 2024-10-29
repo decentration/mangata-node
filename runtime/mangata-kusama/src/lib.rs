@@ -686,6 +686,28 @@ impl InstanceFilter<RuntimeCall> for ProxyType {
 	}
 }
 
+
+impl InstanceFilter<RuntimeCall> for ProxyType {
+	fn filter(&self, c: &RuntimeCall) -> bool {
+		match self {
+			_ if matches!(c, RuntimeCall::Utility(..)) => true,
+			ProxyType::MultiswapAsset => {
+				matches!(
+					c,
+					RuntimeCall::Xyk(pallet_xyk::Call::multiswap_buy_asset { .. }) |
+						RuntimeCall::Xyk(pallet_xyk::Call::multiswap_sell_asset { .. })
+				)
+			},
+		}
+	}
+	fn is_superset(&self, o: &Self) -> bool {
+		match (self, o) {
+			(x, y) if x == y => true,
+			_ => false,
+		}
+	}
+}
+
 impl pallet_proxy::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
 	type RuntimeCall = RuntimeCall;
